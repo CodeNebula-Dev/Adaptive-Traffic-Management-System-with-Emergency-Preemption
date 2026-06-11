@@ -1,0 +1,92 @@
+# ============================================================================
+# ATMS-Net Phase 1 — Vehicle Detector Training Configuration
+# ============================================================================
+# This config controls all aspects of training the custom YOLO-style
+# detector on the MS COCO vehicle subset.
+#
+# Usage: python scripts/train_detector.py --config configs/detector.yaml
+# ============================================================================
+
+# --- Model Architecture ---
+model:
+  num_classes: 4              # car, motorcycle, bus, truck
+  in_channels: 3              # RGB input
+  depth_mul: 0.33             # Depth multiplier (scales bottleneck count per CSP block)
+  width_mul: 0.5              # Width multiplier (scales channel count per layer)
+  img_size: 416               # Input resolution (square)
+
+# --- Dataset ---
+data:
+  data_dir: "data/coco"                      # Root COCO directory
+  train_list: "data/coco/train.txt"          # File listing training image paths
+  val_list: "data/coco/val.txt"              # File listing validation image paths
+  label_dir: "data/coco/labels/train2017"    # YOLO label files directory
+  num_workers: 4                              # Dataloader workers (set to 0 on Mac for debugging)
+
+# --- Training ---
+training:
+  epochs: 50                  # Total training epochs
+  batch_size: 16              # Batch size (reduce to 4-8 for CPU/low VRAM)
+  accumulate_grad: 1          # Gradient accumulation steps (effective batch = batch_size × accumulate_grad)
+
+  # Optimizer: SGD with momentum
+  optimizer: "sgd"
+  learning_rate: 0.01         # Initial learning rate
+  momentum: 0.937             # SGD momentum
+  weight_decay: 0.0005        # L2 regularization
+
+  # Learning rate schedule: cosine annealing
+  scheduler: "cosine"
+  warmup_epochs: 3            # Linear warmup epochs
+  warmup_lr_ratio: 0.1        # LR starts at lr × this ratio during warmup
+  min_lr_ratio: 0.01          # Final LR = lr × this ratio
+
+  # Mixed precision (disable on CPU / MPS)
+  mixed_precision: true       # FP16 training for 2× memory savings
+
+  # EMA (Exponential Moving Average)
+  ema: true                   # Use EMA model for validation
+  ema_decay: 0.9999           # EMA decay rate
+
+# --- Augmentation ---
+augmentation:
+  mosaic_prob: 0.5            # Probability of mosaic augmentation per sample
+  hsv_h: 0.015               # HSV hue jitter range
+  hsv_s: 0.7                 # HSV saturation jitter range
+  hsv_v: 0.4                 # HSV value jitter range
+  flip_prob: 0.5              # Horizontal flip probability
+  cutout_prob: 0.5            # Cutout/random erase probability
+  cutout_max_size: 0.2        # Max cutout patch size (fraction of image)
+
+# --- Loss ---
+loss:
+  box_weight: 0.05            # CIoU box regression loss weight
+  obj_weight: 1.0             # Objectness loss weight
+  cls_weight: 0.5             # Classification loss weight
+
+# --- Evaluation ---
+evaluation:
+  conf_threshold: 0.25        # Minimum confidence for NMS
+  iou_threshold: 0.45         # NMS IoU threshold
+  max_detections: 300         # Max detections per image
+  val_interval: 1             # Validate every N epochs
+
+# --- Checkpointing ---
+checkpoint:
+  save_dir: "checkpoints"     # Directory for saved models
+  save_interval: 10           # Save checkpoint every N epochs
+  save_best: true             # Save best model by mAP@0.5
+
+# --- Logging ---
+logging:
+  log_dir: "logs"             # Log directory
+  log_interval: 50            # Print loss every N batches
+  use_wandb: false            # Enable Weights & Biases (set true when ready)
+  project_name: "ATMS-Net"    # W&B project name
+  run_name: "phase1-detector" # W&B run name
+
+# --- Device ---
+device:
+  # Auto-detected: cuda > mps > cpu
+  # Override with --device flag in train script
+  preferred: "auto"

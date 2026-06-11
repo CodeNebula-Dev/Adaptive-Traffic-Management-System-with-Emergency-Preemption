@@ -1,0 +1,65 @@
+# Quick test config — synthetic data, 2 epochs, tiny batch
+model:
+  num_classes: 4
+  in_channels: 3
+  depth_mul: 0.33
+  width_mul: 0.5
+  img_size: 416
+
+data:
+  data_dir: "data/coco_test"
+  train_list: "data/coco_test/train.txt"
+  val_list: "data/coco_test/val.txt"
+  label_dir: "data/coco_test/labels"
+  num_workers: 0   # 0 for Mac compatibility
+
+training:
+  epochs: 2
+  batch_size: 4
+  accumulate_grad: 1
+  optimizer: "sgd"
+  learning_rate: 0.01
+  momentum: 0.937
+  weight_decay: 0.0005
+  scheduler: "cosine"
+  warmup_epochs: 1
+  warmup_lr_ratio: 0.1
+  min_lr_ratio: 0.01
+  mixed_precision: false    # Disabled for CPU/MPS
+  ema: true
+  ema_decay: 0.9999
+
+augmentation:
+  mosaic_prob: 0.0          # Disable mosaic for quick test
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  flip_prob: 0.5
+  cutout_prob: 0.5
+  cutout_max_size: 0.2
+
+loss:
+  box_weight: 0.05
+  obj_weight: 1.0
+  cls_weight: 0.5
+
+evaluation:
+  conf_threshold: 0.01
+  iou_threshold: 0.45
+  max_detections: 300
+  val_interval: 1
+
+checkpoint:
+  save_dir: "checkpoints/test"
+  save_interval: 1
+  save_best: true
+
+logging:
+  log_dir: "logs/test"
+  log_interval: 5
+  use_wandb: false
+  project_name: "ATMS-Net"
+  run_name: "local-test"
+
+device:
+  preferred: "auto"
