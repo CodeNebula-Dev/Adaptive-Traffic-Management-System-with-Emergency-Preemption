@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+
+# PyTorch
+*.pth
+*.pt
+checkpoints/
+
+# Data
+data/raw/
+data/processed/
+*.hdf5
+*.h5
+
+# Logs and experiments
+logs/
+wandb/
+runs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SUMO
+*.sumocfg.bak
+
+# Large files
+*.zip
+*.tar.gz
+*.rar
+*.mp4
+*.avi
