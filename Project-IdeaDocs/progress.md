@@ -2,7 +2,7 @@
 
 ### Everything That Was Built, How It Works, and What Comes Next
 
-*Last updated: June 12, 2026*
+*Last updated: June 20, 2026*
 
 ---
 
@@ -16,7 +16,8 @@
 6. [The Training Pipeline — How the Model Learns](#6-the-training-pipeline)
 7. [The Local Test — What We Verified](#7-the-local-test)
 8. [Where Things Get Stored](#8-where-things-get-stored)
-9. [What Comes Next](#9-what-comes-next)
+9. [Kaggle Training Notebook — GPU Training Setup](#9-kaggle-training-notebook)
+10. [What Comes Next](#10-what-comes-next)
 
 ---
 
@@ -103,23 +104,23 @@ Here's every folder and file that was created, with explanations:
 ```
 ATMS-Net/
 │
-├── Project-IdeaDocs/                    ← 📄 Project planning documents
+├── Project-IdeaDocs/                    ←  Project planning documents
 │   ├── ATMS-Net.md                      ← Original project idea (existed before)
 │   ├── Phase1.md                        ← Phase 1 implementation plan
 │   └── Traffic Management ... Model.md  ← Full technical roadmap
 │
-├── configs/                             ← ⚙️  Configuration files
+├── configs/                             ←   Configuration files
 │   ├── detector.yaml                    ← Main training config (all hyperparameters)
 │   └── detector_test.yaml               ← Quick local test config (auto-generated)
 │
-├── data/                                ← 📊 Dataset handling
+├── data/                                ←  Dataset handling
 │   ├── __init__.py                      ← Makes this a Python package
 │   └── coco/                            ← COCO-specific data code
 │       ├── __init__.py
 │       ├── download_coco.py             ← Downloads + filters COCO to vehicles only
 │       └── coco_dataset.py              ← PyTorch Dataset class + data loading
 │
-├── models/                              ← 🧠 Neural network architecture
+├── models/                              ←  Neural network architecture
 │   ├── __init__.py
 │   ├── backbone/                        ← Feature extractor (the "eyes")
 │   │   ├── __init__.py
@@ -132,7 +133,7 @@ ATMS-Net/
 │       ├── detection_head.py            ← Anchor-free prediction head
 │       └── yolo_detector.py             ← Full model assembly + EMA
 │
-├── utils/                               ← 🔧 Utility functions
+├── utils/                               ←  Utility functions
 │   ├── __init__.py
 │   ├── augmentations.py                 ← Image augmentation (mosaic, flip, etc.)
 │   ├── boxes.py                         ← Bounding box math (IoU, conversions)
@@ -140,30 +141,34 @@ ATMS-Net/
 │   ├── metrics.py                       ← Evaluation (mAP computation)
 │   └── nms.py                           ← Non-maximum suppression
 │
-├── scripts/                             ← 🚀 Executable scripts
+├── kaggle/                              ←  Kaggle GPU training
+│   ├── README.md                        ← Step-by-step Kaggle guide
+│   └── atms_net_phase1_training.ipynb   ← Complete training notebook
+│
+├── scripts/                             ←  Executable scripts
 │   ├── train_detector.py                ← Main training entry point
 │   └── test_local.sh                    ← Mac local testing shell script
 │
-├── checkpoints/                         ← 💾 Saved model weights (git-ignored)
+├── checkpoints/                         ←  Saved model weights (git-ignored)
 │   └── test/                            ← Test run checkpoints
 │       ├── best.pt                      ← Best model by mAP
 │       ├── last.pt                      ← Most recent checkpoint
 │       ├── epoch_1.pt                   ← Epoch 1 checkpoint
 │       └── epoch_2.pt                   ← Epoch 2 checkpoint
 │
-├── logs/                                ← 📈 Training logs (git-ignored)
+├── logs/                                ←  Training logs (git-ignored)
 │   └── test/
 │       └── training.log                 ← Per-epoch loss + metrics
 │
-├── data/coco_test/                      ← 🧪 Synthetic test data (git-ignored)
+├── data/coco_test/                      ←  Synthetic test data (git-ignored)
 │   ├── images/                          ← 50 fake images with colored rectangles
 │   ├── labels/                          ← YOLO-format label files
 │   ├── train.txt                        ← List of 40 training image paths
 │   └── val.txt                          ← List of 10 validation image paths
 │
-├── requirements.txt                     ← 📦 Python dependencies
-├── README.md                            ← 📖 Project README
-└── .gitignore                           ← 🚫 Files excluded from git
+├── requirements.txt                     ←  Python dependencies
+├── README.md                            ←  Project README
+└── .gitignore                           ←  Files excluded from git
 ```
 
 ### What `__init__.py` Files Are
@@ -638,15 +643,98 @@ This is an **experiment tracking cloud platform** (like a fancy dashboard for lo
 
 ---
 
-## 9. What Comes Next
+## 9. Kaggle Training Notebook
 
-### Immediate Next Step: Train on Real Data
+### Why Kaggle?
 
-The code is complete. To actually train a useful model:
+Our model has 13.2 million parameters. Training it from scratch on a CPU (even a fast M4 Mac) would take **days**. Kaggle provides a free NVIDIA Tesla T4 GPU (16 GB VRAM) with ~30 hours/week of compute, which can finish 50 epochs of training in **2–3 hours**.
 
-1. **Set up Kaggle notebook** — Upload code, use COCO dataset (pre-available on Kaggle)
-2. **Train 50 epochs on Tesla T4** — Kaggle gives ~30 hours/week free GPU
+We created a dedicated `kaggle/` folder with a ready-to-run Jupyter notebook.
+
+### What's Inside `kaggle/`
+
+| File | Purpose |
+|------|---------|
+| `README.md` | Step-by-step guide: how to upload, enable GPU, run, and download results |
+| `atms_net_phase1_training.ipynb` | Complete training notebook with 6 sections |
+
+### The 6 Sections of the Notebook
+
+Here is exactly what each section of the Kaggle notebook does:
+
+#### Section 1 — Environment Setup
+- Verifies the GPU is available (prints GPU name + VRAM)
+- Clones the ATMS-Net repository from GitHub
+- Installs Python dependencies (`pycocotools`, `opencv`, `tqdm`, etc.)
+- Sanity-checks by importing the model and printing its summary
+
+#### Section 2 — Dataset Preparation
+- **Option A**: Downloads the full COCO 2017 dataset (~20 GB) using our `download_coco.py` script
+- **Option B** (faster): Links Kaggle's pre-loaded COCO dataset via symlinks (avoids re-downloading)
+- Filters annotations to only 4 vehicle classes (car, motorcycle, bus, truck)
+- Converts labels from COCO JSON format to YOLO `.txt` format
+- Splits into 80% train / 20% validation
+- Visualizes 6 random training images with their ground-truth bounding boxes
+
+#### Section 3 — Training Configuration
+- Loads the default `configs/detector.yaml`
+- Applies Kaggle-specific overrides:
+  - `batch_size: 32` (T4 has 16 GB VRAM — fits larger batches)
+  - `mixed_precision: true` (FP16 halves memory, speeds up 1.5×)
+  - `num_workers: 4` (Kaggle has 4 CPU cores for data loading)
+  - Checkpoint and log paths set to `/kaggle/working/` (persists after kernel restart)
+- Saves as `configs/kaggle_detector.yaml`
+
+#### Section 4 — Training
+- Runs the full training command:
+  ```bash
+  python scripts/train_detector.py --config configs/kaggle_detector.yaml --device cuda
+  ```
+- 50 epochs with warmup + cosine annealing LR schedule
+- Validates every epoch and saves `best.pt` when mAP@0.5 improves
+- Expected time: ~2–3 hours on Tesla T4
+
+#### Section 5 — Results & Evaluation
+- **Loss curves**: Plots total loss, box/obj/cls components, and LR schedule over all epochs
+- **Checkpoint inspection**: Loads `best.pt` and prints epoch, mAP, tensor count, file size
+- **Inference demo**: Loads the trained model, runs it on 6 random validation images, draws predicted bounding boxes with class labels and confidence scores
+
+#### Section 6 — Export & Download
+- Copies `best.pt`, `last.pt`, training log, and plots into a clean output folder
+- Zips everything into `atms_net_phase1_trained.zip` for easy download
+- Prints instructions: download from Kaggle's Output tab → place `best.pt` in local `checkpoints/`
+
+### How to Use It (Quick Version)
+
+1. Go to [kaggle.com/code](https://www.kaggle.com/code) → **New Notebook**
+2. **File → Import Notebook** → upload `atms_net_phase1_training.ipynb`
+3. **Settings**: GPU T4 x2 + Internet ON
+4. Click **Run All** → wait ~2–3 hours
+5. Download `best.pt` from the Output tab
+
+### Expected Results After Training
+
+| Metric | Expected Value |
+|--------|---------------|
+| mAP@0.5 | 70–80% (target: >75%) |
+| car AP | ~85% |
+| truck AP | ~70% |
+| bus AP | ~75% |
+| motorcycle AP | ~65% |
+| Training time | ~2–3 hours on T4 |
+
+---
+
+## 10. What Comes Next
+
+### Immediate Next Step: Run the Kaggle Notebook
+
+The code and the Kaggle notebook are both complete. To train the model:
+
+1. ✅ ~~Set up Kaggle notebook~~ — **Done!** (see `kaggle/` folder)
+2. **Train 50 epochs on Tesla T4** — Upload the notebook and run it
 3. **Evaluate** — Check mAP@0.5 > 75%
+4. **Download `best.pt`** — Place it in your local `checkpoints/` folder
 
 ### After Phase 1: The Remaining Phases
 
@@ -657,12 +745,17 @@ The code is complete. To actually train a useful model:
 | **Phase 4** | Train DQN reinforcement learning signal controller in SUMO simulator | Phase 2 density output |
 | **Phase 5** | Full system integration test — all 4 modules working together | Everything |
 
-### Git Status
+### Git History
 
-- **24 files committed and pushed** to `main` branch
-- Commit: `feat: Phase 1 — Custom YOLO-style vehicle detector (Module 1)`
+| Commit | Files | Description |
+|--------|-------|-------------|
+| `c1780ce` | 24 files, 3,808 lines | Phase 1 code — full detector implementation |
+| `e1a4a8e` | 1 file, 668 lines | Progress documentation (this file) |
+| `bfb8153` | 2 files, 764 lines | Kaggle notebook + README for GPU training |
+
+- Branch: `main`
 - Repository: `CodeNebula-Dev/Adaptive-Traffic-Management-System-with-Emergency-Preemption`
 
 ---
 
-*Phase 1 code complete. Ready for Kaggle training.* 🚀
+*Phase 1 code complete. Kaggle training notebook ready. Next: run training on GPU!* 🚀
