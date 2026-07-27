@@ -40,8 +40,7 @@ import yaml
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 
 from tqdm import tqdm
 
@@ -154,7 +153,7 @@ def train_one_epoch(model, dataloader, criterion, optimizer, scheduler, scaler,
 
         # Forward pass (with optional mixed precision)
         if use_amp:
-            with autocast('cuda'):
+            with autocast('cuda', enabled=use_amp):
                 predictions = model(images)
                 loss_dict = criterion(predictions, targets)
                 loss = loss_dict['loss'] / accumulate
@@ -385,7 +384,7 @@ def main():
     print(f"  → Scheduler: Cosine annealing (warmup={config['training']['warmup_epochs']} epochs)")
 
     # ---- Mixed Precision ----
-    scaler = GradScaler(enabled=config['training']['mixed_precision'])
+    scaler = GradScaler('cuda', enabled=config['training']['mixed_precision'])
     if config['training']['mixed_precision']:
         print("  → Mixed precision (FP16) enabled")
 
