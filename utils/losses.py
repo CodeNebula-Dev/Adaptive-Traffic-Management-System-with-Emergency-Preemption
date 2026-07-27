@@ -73,7 +73,7 @@ class YOLOLoss(nn.Module):
             loss_dict: Dict with 'loss', 'box_loss', 'obj_loss', 'cls_loss'
         """
         device = predictions['cls'][0].device
-        dtype = predictions['cls'][0].dtype
+        dtype = torch.float32
 
         total_box_loss = torch.tensor(0.0, device=device, dtype=dtype)
         total_obj_loss = torch.tensor(0.0, device=device, dtype=dtype)
@@ -83,9 +83,9 @@ class YOLOLoss(nn.Module):
 
         # Process each scale
         for scale_idx in range(len(self.strides)):
-            cls_pred = predictions['cls'][scale_idx]  # (B, C, H, W)
-            reg_pred = predictions['reg'][scale_idx]  # (B, 4, H, W)
-            obj_pred = predictions['obj'][scale_idx]  # (B, 1, H, W)
+            cls_pred = predictions['cls'][scale_idx].float()  # (B, C, H, W)
+            reg_pred = predictions['reg'][scale_idx].float()  # (B, 4, H, W)
+            obj_pred = predictions['obj'][scale_idx].float()  # (B, 1, H, W)
             stride = self.strides[scale_idx]
 
             h, w = cls_pred.shape[2], cls_pred.shape[3]
@@ -147,7 +147,7 @@ class YOLOLoss(nn.Module):
                         cxcywh_to_xyxy(matched_gt),
                     ).clamp(0, 1)
 
-                    obj_target[matched_pred_idx, 0] = iou_values.detach()
+                    obj_target[matched_pred_idx, 0] = iou_values.detach().to(dtype=obj_target.dtype)
 
                     # Box loss (CIoU) on matched pairs
                     ciou = bbox_iou(
