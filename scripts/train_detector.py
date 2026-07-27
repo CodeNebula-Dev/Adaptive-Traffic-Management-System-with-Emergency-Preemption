@@ -174,12 +174,12 @@ def train_one_epoch(model, dataloader, criterion, optimizer, scheduler, scaler,
                 optimizer.step()
             optimizer.zero_grad()
 
+            # Step scheduler after optimizer step
+            scheduler.step()
+
             # Update EMA
             if ema is not None:
                 ema.update(model)
-
-        # Step scheduler per batch
-        scheduler.step()
 
         # Accumulate losses
         total_box += loss_dict['box_loss'].item()
