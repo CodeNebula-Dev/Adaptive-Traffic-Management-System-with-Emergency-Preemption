@@ -114,6 +114,16 @@ Where $\beta = 0.9999$.
 
 ---
 
+### What is an Epoch & Batch?
+
+- **1 Epoch** means **one complete pass through the entire training dataset** (all 14,519 images).
+- Because processing 14,519 images at once is too large for GPU VRAM, images are grouped into mini-batches of **32 images at a time** (`batch_size = 32`).
+- 1 Epoch consists of **453 batches** ($\lceil 14,519 / 32 \rceil = 453\text{ iterations}$).
+
+During **Epoch 1**, the model processes all 453 batches, seeing every image in the training set once. Training for **50 Epochs** allows the model to see the entire dataset 50 times under different random augmentations (mosaic, color jitter, flips), allowing the weights to adjust gradually and maximize object detection accuracy.
+
+---
+
 ### Data Augmentation Pipeline
 
 To prevent overfitting during 50 epochs, the training pipeline applies random augmentations on the fly:
@@ -180,6 +190,29 @@ LR
 $$\eta_t = \eta_{\text{min}} + \frac{1}{2}(\eta_{\text{max}} - \eta_{\text{min}})\left(1 + \cos\left(\frac{\pi t}{T_{\text{max}}}\right)\right)$$
 
 Where $\eta_{\text{max}} = 0.01$, $\eta_{\text{min}} = 0.0001$, and $T_{\text{max}} = 47$ epochs.
+
+---
+
+### Backpropagation Engine & Enhanced Learning
+
+**Yes, ATMS-Net uses Backpropagation** as the fundamental mathematical mechanism to update all **13,173,691 trainable parameters** during every training iteration.
+
+#### The 4-Step Iteration Loop
+
+For each mini-batch of 32 images:
+
+1. **Forward Pass (`model(images)`):** Input images pass forward through the backbone (`CSPDarknet`), neck (`FPNPANet`), and head (`DetectionHead`) to produce 3,549 bounding box predictions per image.
+2. **Loss Calculation (`criterion(predictions, targets)`):** Compute composite loss ($L_{\text{total}} = 0.05 L_{\text{CIoU}} + 1.0 L_{\text{obj}} + 0.5 L_{\text{cls}}$).
+3. **Backpropagation (`loss.backward()`):** PyTorch applies the mathematical chain rule to calculate the exact partial gradient ($\frac{\partial L_{\text{total}}}{\partial w_i}$) for every weight $w_i$ in the network.
+4. **Weight Update (`optimizer.step()`):** The SGD Nesterov optimizer uses the computed gradients to adjust weights in the direction of steepest descent.
+
+#### Enhanced Learning Mechanics
+
+To maximize feature learning performance beyond basic backpropagation, ATMS-Net integrates three specialized enhancements:
+
+- **SimOTA Dynamic Matching:** Instead of fixed IoU thresholds, SimOTA dynamically pairs ground-truth objects to predicted cells based on cost, producing cleaner, less noisy gradient signals for backpropagation.
+- **AMP Gradient Scaling (`scaler.scale(loss).backward()`):** Under FP16 mixed precision, gradients are dynamically scaled up before backpropagation to prevent 16-bit floating-point numbers from underflowing to zero.
+- **Exponential Moving Average (EMA):** While backpropagation updates the raw model weights, EMA updates a smoothed "shadow copy" ($\theta_{\text{EMA}} = 0.9999 \theta_{\text{EMA}} + 0.0001 \theta_{\text{current}}$) after every backpropagation step for evaluation stability.
 
 ---
 
