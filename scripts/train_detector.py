@@ -154,7 +154,7 @@ def train_one_epoch(model, dataloader, criterion, optimizer, scheduler, scaler,
 
         # Forward pass (with optional mixed precision)
         if use_amp:
-            with autocast():
+            with autocast('cuda'):
                 predictions = model(images)
                 loss_dict = criterion(predictions, targets)
                 loss = loss_dict['loss'] / accumulate

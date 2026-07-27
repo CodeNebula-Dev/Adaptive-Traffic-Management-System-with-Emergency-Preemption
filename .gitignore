@@ -30,6 +30,8 @@ env/
 checkpoints/
 
 # Data
+data/coco/
+data/coco_test/
 data/raw/
 data/processed/
 *.hdf5

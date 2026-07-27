@@ -2,7 +2,9 @@
 
 ### Everything That Was Built, How It Works, and What Comes Next
 
+ *updated: June 12, 2026*
 *Last updated: June 20, 2026*
+
 
 ---
 

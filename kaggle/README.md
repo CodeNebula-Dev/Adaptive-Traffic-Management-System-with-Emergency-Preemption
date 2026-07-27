@@ -54,3 +54,30 @@ and place it in your local project's `checkpoints/` folder.
 After 50 epochs on the COCO vehicle subset:
 - **mAP@0.5**: 70-80% (target: >75%)
 - **Per-class AP**: car ~85%, truck ~70%, bus ~75%, motorcycle ~65%
+
+---
+
+## Training Startup Parameters Explained
+
+When training starts, the script logs essential model, dataset, and optimizer parameters:
+
+### 1. Model Architecture & Parameters
+- **Total params: 13,173,691 (~13.2 Million)**: Number of learnable weights and biases in the custom YOLO detector.
+- **Size (MB): 50.3**: VRAM footprint of uncompressed model parameters.
+- **Backbone & Neck Channels `[128, 256, 512]`**: Multi-scale feature extraction outputs:
+  - **Stride 8** (52×52 grid): Detects small vehicles (far-away cars/motorcycles).
+  - **Stride 16** (26×26 grid): Detects medium vehicles (nearby cars/trucks).
+  - **Stride 32** (13×13 grid): Detects large vehicles (buses/heavy trucks).
+- **EMA (Exponential Moving Average)**: Maintains a smooth shadow copy of model weights (`decay=0.9999`) for evaluation stability.
+
+### 2. Dataset Distribution
+- **Train: 14,519 images (453 batches)**: At `batch_size=32`, dataset is split into 453 iterations per epoch ($14,519 / 32 \approx 453$).
+- **Val: 3,629 images (114 batches)**: Validation set evaluated after each training epoch.
+
+### 3. Optimizer & Learning Rate Schedule
+- **SGD (lr=0.01, momentum=0.937, wd=0.0005)**: Stochastic Gradient Descent with Nesterov momentum and L2 weight decay.
+- **Parameter Groups (BN=66, Conv=75, Bias=75)**: Weight decay is disabled for BatchNorm weights and biases to avoid over-regularization.
+- **Cosine Annealing Scheduler**:
+  - **Epochs 1–3**: Linear warmup ramping learning rate from `0.001` to `0.01`.
+  - **Epochs 4–50**: Cosine decay reducing learning rate to `0.0001` for final fine-tuning.
+

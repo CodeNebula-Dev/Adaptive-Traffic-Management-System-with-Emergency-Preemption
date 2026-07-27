@@ -259,15 +259,13 @@ class YOLOLoss(nn.Module):
         # IoU between candidates and all GT boxes
         pair_iou = self._pairwise_iou(candidate_boxes, gt_boxes)  # (N_cand, N_gt)
 
-        # Classification cost
+        # Classification cost (computed in float32 to be AMP/autocast safe)
         gt_onehot = F.one_hot(gt_classes, self.num_classes).float()  # (N_gt, C)
-        cls_prob = (candidate_cls.sigmoid() * candidate_obj.sigmoid())  # (N_cand, C)
+        cls_prob = (candidate_cls.sigmoid() * candidate_obj.sigmoid()).float().clamp(1e-7, 1.0 - 1e-7)  # (N_cand, C)
 
-        cls_cost = F.binary_cross_entropy(
-            cls_prob.unsqueeze(1).expand(-1, n_gt, -1),
-            gt_onehot.unsqueeze(0).expand(candidate_idx.numel(), -1, -1),
-            reduction='none',
-        ).sum(-1)  # (N_cand, N_gt)
+        p = cls_prob.unsqueeze(1)  # (N_cand, 1, C)
+        t = gt_onehot.unsqueeze(0)  # (1, N_gt, C)
+        cls_cost = -(t * torch.log(p) + (1.0 - t) * torch.log(1.0 - p)).sum(-1)  # (N_cand, N_gt)
 
         # Combined cost
         cost_matrix = cls_cost + 3.0 * (1.0 - pair_iou)

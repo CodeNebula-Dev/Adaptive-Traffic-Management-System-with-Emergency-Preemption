@@ -377,4 +377,3 @@ This project is intended for academic and research purposes. See [LICENSE](LICEN
 
 ---
 
-**ATMS-Net** — Learned where learning is appropriate, deterministic where safety is critical.

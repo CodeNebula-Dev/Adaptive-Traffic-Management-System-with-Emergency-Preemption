@@ -5,15 +5,6 @@ Architecture: Cross-Stage Partial Network with residual blocks.
 Produces multi-scale feature maps at strides 8, 16, and 32 — feeding
 into the FPN+PANet neck for bidirectional feature fusion.
 
-Key components:
-    - ConvBnAct: Conv2d → BatchNorm2d → SiLU activation
-    - Bottleneck: Two-conv residual block with optional skip connection
-    - CSPBlock: Cross-Stage Partial block that splits gradient flow
-    - SPPBlock: Spatial Pyramid Pooling for multi-scale receptive field
-    - CSPDarknet: Full backbone assembling stem + 4 stages + SPP
-
-Reference: CSPNet (Wang et al., 2020) — gradient flow splitting reduces
-redundant computation while preserving feature richness.
 """
 
 import torch
