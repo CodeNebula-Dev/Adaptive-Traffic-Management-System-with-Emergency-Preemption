@@ -20,7 +20,9 @@ data:
   data_dir: "data/coco"                      # Root COCO directory
   train_list: "data/coco/train.txt"          # File listing training image paths
   val_list: "data/coco/val.txt"              # File listing validation image paths
-  label_dir: "data/coco/labels/train2017"    # YOLO label files directory
+  train_label_dir: "data/coco/labels/train2017" # Training label directory
+  val_label_dir: "data/coco/labels/val2017"     # Validation label directory
+  label_dir: "data/coco/labels/train2017"    # Legacy fallback
   num_workers: 4                              # Dataloader workers (set to 0 on Mac for debugging)
 
 # --- Training ---

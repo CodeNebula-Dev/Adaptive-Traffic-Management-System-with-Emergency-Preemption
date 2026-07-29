@@ -93,6 +93,13 @@ class COCOVehicleDataset(Dataset):
         label_filename = os.path.splitext(img_filename)[0] + '.txt'
         label_path = os.path.join(self.label_dir, label_filename)
 
+        # Fallback to auto-inferred path if assigned label_dir file does not exist
+        if not os.path.exists(label_path):
+            alt_path = img_path.replace('train2017', 'labels/train2017').replace('val2017', 'labels/val2017')
+            alt_path = os.path.splitext(alt_path)[0] + '.txt'
+            if os.path.exists(alt_path):
+                label_path = alt_path
+
         if os.path.exists(label_path):
             labels = np.loadtxt(label_path, dtype=np.float32)
             if labels.ndim == 1:

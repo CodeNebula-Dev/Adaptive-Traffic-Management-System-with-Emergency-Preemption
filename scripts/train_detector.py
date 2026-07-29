@@ -328,9 +328,12 @@ def main():
         print(f"\n  For a quick smoke test without data, use: --epochs 0")
         sys.exit(1)
 
+    train_label_dir = data_cfg.get('train_label_dir', data_cfg.get('label_dir', 'data/coco/labels/train2017'))
+    val_label_dir = data_cfg.get('val_label_dir', data_cfg.get('label_dir', 'data/coco/labels/train2017').replace('train2017', 'val2017'))
+
     train_dataset = COCOVehicleDataset(
         img_list=data_cfg['train_list'],
-        label_dir=data_cfg['label_dir'],
+        label_dir=train_label_dir,
         img_size=config['model']['img_size'],
         augment=True,
         mosaic_prob=config['augmentation'].get('mosaic_prob', 0.5),
@@ -338,7 +341,7 @@ def main():
 
     val_dataset = COCOVehicleDataset(
         img_list=data_cfg['val_list'],
-        label_dir=data_cfg['label_dir'],
+        label_dir=val_label_dir,
         img_size=config['model']['img_size'],
         augment=False,  # No augmentation for validation
         mosaic_prob=0.0,
