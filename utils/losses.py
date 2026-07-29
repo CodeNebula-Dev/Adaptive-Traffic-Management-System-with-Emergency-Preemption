@@ -261,7 +261,7 @@ class YOLOLoss(nn.Module):
 
         # Classification cost (computed in float32 to be AMP/autocast safe)
         gt_onehot = F.one_hot(gt_classes, self.num_classes).float()  # (N_gt, C)
-        cls_prob = (candidate_cls.sigmoid() * candidate_obj.sigmoid()).float().clamp(1e-7, 1.0 - 1e-7)  # (N_cand, C)
+        cls_prob = candidate_cls.sigmoid().float().clamp(1e-7, 1.0 - 1e-7)  # (N_cand, C)
 
         p = cls_prob.unsqueeze(1)  # (N_cand, 1, C)
         t = gt_onehot.unsqueeze(0)  # (1, N_gt, C)
