@@ -171,3 +171,28 @@ NVIDIA Parallel Batched (Fast ⚡):
 1. **Batched Forward Pass**: `ATMSDetector` natively accepts 4D tensor batches `(B, 3, 416, 416)`. Stacking frames from all 4 intersection approaches into batch size $B=4$ allows NVIDIA Tensor Cores to execute matrix multiplication for all 4 cameras simultaneously.
 2. **TensorRT Optimization**: Exporting ATMS-Net to ONNX/TensorRT enables hardware-accelerated video decoding (`nvdec`) and INT8/FP16 quantization on edge devices (**NVIDIA Jetson Orin Nano / Xavier** mounted on traffic light poles).
 3. **Phase 4 & 5 Integration**: The Reinforcement Learning (RL) signal agent receives synchronized state vectors for all 4 approaches simultaneously, enabling real-time adaptive green-wave scheduling.
+
+---
+
+## 8. Industry Competitive Analysis & Unique Architectural Advantages
+
+### Benchmark Comparison Matrix
+
+At 13.2M parameters (~50 MB VRAM footprint), ATMS-Net operates in the ideal "Edge AI Sweet Spot" for smart traffic infrastructure:
+
+| Model Architecture | Parameters | Memory Size | Target mAP@0.5 | Edge FPS | Primary Target & Deployment Case |
+|--------------------|------------|-------------|----------------|----------|----------------------------------|
+| **YOLOv5s** | ~7.2M | ~27 MB | ~56% | 75 FPS | Low-power IoT / Raspberry Pi |
+| **YOLOX-S** | ~9.0M | ~35 MB | ~65% | 65 FPS | Mobile applications |
+| 🚘 **ATMS-Net (Custom)** | **13.2M** | **~50 MB** | **~75–78%** | **60+ FPS** | **Smart Traffic Controllers (NVIDIA Jetson)** |
+| **YOLOv8m** | ~25.9M | ~100 MB | ~79% | 35 FPS | Desktop GPU workstations |
+| **YOLOv8x** | ~68.2M | ~260 MB | ~83% | 12 FPS | High-end Cloud Servers (Too slow for traffic lights) |
+| **Faster R-CNN** | ~41.8M | ~160 MB | ~72% | 10 FPS | Legacy two-stage offline research |
+
+### ATMS-Net Unique Competitive Advantages
+
+Why build custom ATMS-Net instead of using generic off-the-shelf YOLOv8?
+
+1. **Decoupled Detection Head**: Unlike single-branch heads, ATMS-Net completely separates **Classification** (`car`, `truck`, `bus`, `motorcycle`) from **Locational Regression** (bounding box coordinates). This prevents feature interference, allowing classification and box localization to optimize independently.
+2. **SimOTA Dynamic Anchor Matching**: Instead of hardcoding static anchor box aspect ratios, SimOTA dynamically pairs ground-truth vehicles to candidate grid cells based on cost matching (IoU + class probability).
+3. **Native Reinforcement Learning Interface (Phase 4 & 5)**: Standard YOLO models only output raw bounding boxes for visualization. ATMS-Net directly converts vehicle predictions into live lane-by-lane density matrices fed straight into the **SUMO Adaptive Traffic Signal RL Controller** to dynamically eliminate gridlock and grant emergency preemption green waves.
