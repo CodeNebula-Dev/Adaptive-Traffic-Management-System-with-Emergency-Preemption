@@ -196,3 +196,25 @@ Why build custom ATMS-Net instead of using generic off-the-shelf YOLOv8?
 1. **Decoupled Detection Head**: Unlike single-branch heads, ATMS-Net completely separates **Classification** (`car`, `truck`, `bus`, `motorcycle`) from **Locational Regression** (bounding box coordinates). This prevents feature interference, allowing classification and box localization to optimize independently.
 2. **SimOTA Dynamic Anchor Matching**: Instead of hardcoding static anchor box aspect ratios, SimOTA dynamically pairs ground-truth vehicles to candidate grid cells based on cost matching (IoU + class probability).
 3. **Native Reinforcement Learning Interface (Phase 4 & 5)**: Standard YOLO models only output raw bounding boxes for visualization. ATMS-Net directly converts vehicle predictions into live lane-by-lane density matrices fed straight into the **SUMO Adaptive Traffic Signal RL Controller** to dynamically eliminate gridlock and grant emergency preemption green waves.
+
+---
+
+## 9. SUMO & Reinforcement Learning Traffic Signal Control (RL-TSC) Standardization
+
+In academic literature (IEEE/ACM) and smart city traffic engineering, **SUMO RL Traffic Control** refers to two standardized research domains integrated into ATMS-Net:
+
+### 1. SUMO (Simulation of Urban MObility)
+- **Global Standard**: Developed by the **German Aerospace Center (DLR)** and maintained under the **Eclipse Foundation** (`eclipse-sumo`).
+- **Microscopic Physics Engine**: Simulates individual vehicle acceleration, lane-changing dynamics, emergency braking, and signal phase transitions at sub-second granularity.
+- Used globally by top research institutions (MIT, UC Berkeley, ETH Zurich) for autonomous vehicle and traffic signal evaluation.
+
+### 2. RL-TSC (Reinforcement Learning for Traffic Signal Control)
+- Replaces rigid, fixed-timer traffic lights (e.g., static 30s Green cycles) with an adaptive Deep Reinforcement Learning agent (PPO/DQN):
+  - **State Space ($S_t$)**: Real-time queue length, waiting time, and vehicle density matrices provided by ATMS-Net.
+  - **Action Space ($A_t$)**: Keep current Green phase or transition to next approach.
+  - **Reward Function ($R_t$)**: Minimizes total cumulative vehicle delay and eliminates gridlock:
+  
+  $$R_t = -\sum_{i \in \text{lanes}} \left( w_{\text{queue}} \cdot Q_{i,t} + w_{\text{wait}} \cdot W_{i,t} \right) + R_{\text{emergency}}$$
+
+### 3. TraCI (Traffic Control Interface) Engine
+ATMS-Net communicates with SUMO via **TraCI (Traffic Control Interface)** — a socket-based Python API that allows real-time state extraction and traffic light control during simulation loops.
