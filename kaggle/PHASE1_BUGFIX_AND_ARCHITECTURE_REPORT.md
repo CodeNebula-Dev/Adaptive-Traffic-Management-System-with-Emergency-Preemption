@@ -218,3 +218,21 @@ In academic literature (IEEE/ACM) and smart city traffic engineering, **SUMO RL 
 
 ### 3. TraCI (Traffic Control Interface) Engine
 ATMS-Net communicates with SUMO via **TraCI (Traffic Control Interface)** — a socket-based Python API that allows real-time state extraction and traffic light control during simulation loops.
+
+---
+
+## 10. Validation Execution Phase Mechanics (114 Batches)
+
+Following the completion of every 453-batch training epoch, the training pipeline automatically pauses weight updates and enters the **Validation Phase (114 batches)**:
+
+### 1. Batch Computation Breakdown
+With a validation set size of $N_{\text{val}} = 3,629$ images and a batch size of $B = 32$:
+
+$$\text{Validation Batches} = \left\lceil \frac{3629}{32} \right\rceil = 114 \text{ batches}$$
+
+### 2. Execution Pipeline During Validation
+1. **Gradient Disabling (`torch.no_grad()`)**: Freezes all 13.17M model weights to prevent memory allocation for backward pass computation graphs.
+2. **Evaluation Mode (`model.eval()`)**: Disables Dropout layers and sets Batch Normalization (`BatchNorm2d`) modules to use running population statistics instead of mini-batch statistics.
+3. **Forward Inference**: Passes all 3,629 unseen validation images through `CSPDarknet` $\rightarrow$ `FPNPANet` $\rightarrow$ `Decoupled Detection Heads`.
+4. **Post-Processing (NMS)**: Filters predictions using Non-Maximum Suppression at `conf_threshold = 0.01` and `iou_threshold = 0.45`.
+5. **Precision-Recall Curve & mAP Calculation**: Computes Intersection over Union (IoU) between remaining candidate boxes and ground-truth annotations across all 4 target classes (`car`, `truck`, `bus`, `motorcycle`), calculating mean Average Precision at IoU thresholds of $0.50$ (`mAP@0.5`) and $0.50:0.95$ (`mAP@0.5:0.95`).
