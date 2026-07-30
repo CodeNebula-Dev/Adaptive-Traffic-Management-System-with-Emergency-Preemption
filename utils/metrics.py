@@ -29,7 +29,7 @@ class DetectionMetrics:
         print(f"mAP@0.5: {results['mAP50']:.4f}")
     """
 
-    CLASS_NAMES = ['car', 'truck', 'bus', 'motorcycle']
+    CLASS_NAMES = ['car', 'motorcycle', 'bus', 'truck']
 
     def __init__(self, num_classes=4, iou_thresholds=None):
         """

@@ -106,7 +106,7 @@ class YOLOLoss(nn.Module):
             # Decode box predictions to absolute coords for assignment
             grid_flat = grid.reshape(-1, 2)  # (H*W, 2)
             decoded_xy = (reg_pred_flat[..., :2].sigmoid() * 2 - 0.5 + grid_flat) * stride
-            decoded_wh = (reg_pred_flat[..., 2:4].sigmoid() * 2) ** 2 * stride
+            decoded_wh = torch.exp(reg_pred_flat[..., 2:4].clamp(-5, 5)) * stride
             decoded_boxes = torch.cat([decoded_xy, decoded_wh], dim=-1)  # (B, H*W, 4) cxcywh
 
             # Compute per-image losses

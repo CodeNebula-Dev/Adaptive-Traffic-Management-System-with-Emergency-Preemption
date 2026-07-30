@@ -192,8 +192,8 @@ class DetectionHead(nn.Module):
         # Decode center coordinates: sigmoid offset + grid position, scaled by stride
         xy = (reg_out[..., :2].sigmoid() * 2 - 0.5 + grid) * stride
 
-        # Decode width/height: exp of prediction, scaled by stride
-        wh = (reg_out[..., 2:4].sigmoid() * 2) ** 2 * stride
+        # Decode width/height: exp of prediction (clamped for stability), scaled by stride
+        wh = torch.exp(reg_out[..., 2:4].clamp(-5, 5)) * stride
 
         # Apply sigmoid to objectness and class predictions
         obj_conf = obj_out.sigmoid()

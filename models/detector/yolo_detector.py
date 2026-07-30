@@ -51,7 +51,7 @@ class ATMSDetector(nn.Module):
     """
 
     # Vehicle class names for ATMS-Net
-    CLASS_NAMES = ['car', 'truck', 'bus', 'motorcycle']
+    CLASS_NAMES = ['car', 'motorcycle', 'bus', 'truck']
 
     def __init__(self, num_classes=4, depth_mul=0.33, width_mul=0.5, in_channels=3):
         super().__init__()

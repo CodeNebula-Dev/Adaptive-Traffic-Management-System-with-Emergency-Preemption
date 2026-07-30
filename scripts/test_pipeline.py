@@ -38,8 +38,8 @@ def test_overfit_single_batch():
         [1, 3, 100.0, 100.0, 80.0, 60.0],     # batch 1, class 3 (truck)
     ], device=device)
 
-    print("\nStarting 100 overfitting iterations...")
-    for i in range(1, 101):
+    print("\nStarting 200 overfitting iterations...")
+    for i in range(1, 201):
         optimizer.zero_grad()
         preds = model(dummy_images)
         loss_dict = criterion(preds, dummy_targets)

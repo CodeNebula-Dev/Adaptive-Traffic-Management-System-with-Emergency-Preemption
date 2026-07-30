@@ -439,8 +439,10 @@ def main():
 
         # Validate
         val_interval = config['evaluation'].get('val_interval', 1)
+        warmup_epochs = config['training'].get('warmup_epochs', 3)
         if (epoch + 1) % val_interval == 0:
-            eval_model = ema.ema if ema else model
+            # Use raw model during early warmup while EMA is still initializing
+            eval_model = ema.ema if (ema and (epoch + 1) > warmup_epochs) else model
             val_results = validate(eval_model, val_loader, criterion, device, config)
 
             map50 = val_results['mAP50']

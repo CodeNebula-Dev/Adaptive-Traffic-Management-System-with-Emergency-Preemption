@@ -55,8 +55,9 @@ def class_aware_nms(predictions, conf_threshold=0.25, iou_threshold=0.45, max_de
     cls_conf, cls_id = predictions[:, 5:].max(dim=1)
     conf = predictions[:, 4] * cls_conf
 
-    # Filter by combined confidence
-    mask = conf > conf_threshold
+    # Use max of obj_conf and combined conf for thresholding to avoid early-stage zero-detection cutoff
+    max_score = torch.maximum(predictions[:, 4], conf)
+    mask = max_score > conf_threshold
     if mask.sum() == 0:
         return None
 
