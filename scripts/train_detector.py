@@ -168,14 +168,16 @@ def train_one_epoch(model, dataloader, criterion, optimizer, scheduler, scaler,
         # Optimizer step (with gradient accumulation)
         if (batch_idx + 1) % accumulate == 0:
             if use_amp:
+                scale_before = scaler.get_scale()
                 scaler.step(optimizer)
                 scaler.update()
+                scale_after = scaler.get_scale()
+                if scale_before <= scale_after:
+                    scheduler.step()
             else:
                 optimizer.step()
+                scheduler.step()
             optimizer.zero_grad()
-
-            # Step scheduler after optimizer step
-            scheduler.step()
 
             # Update EMA
             if ema is not None:

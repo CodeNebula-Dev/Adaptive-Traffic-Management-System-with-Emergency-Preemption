@@ -79,6 +79,9 @@ class DetectionMetrics:
             else:
                 gt = torch.zeros((0, 5))
 
+            if det is not None:
+                det = det.cpu()
+
             self.all_detections.append(det)
             self.all_targets.append(gt)
 

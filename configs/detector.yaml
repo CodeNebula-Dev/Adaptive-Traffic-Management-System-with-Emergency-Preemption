@@ -21,7 +21,7 @@ data:
   train_list: "data/coco/train.txt"          # File listing training image paths
   val_list: "data/coco/val.txt"              # File listing validation image paths
   train_label_dir: "data/coco/labels/train2017" # Training label directory
-  val_label_dir: "data/coco/labels/val2017"     # Validation label directory
+  val_label_dir: "data/coco/labels/train2017"   # Validation label directory (train2017 since val.txt is a split of train2017)
   label_dir: "data/coco/labels/train2017"    # Legacy fallback
   num_workers: 4                              # Dataloader workers (set to 0 on Mac for debugging)
 

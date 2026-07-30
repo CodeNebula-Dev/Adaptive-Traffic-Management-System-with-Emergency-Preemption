@@ -91,20 +91,33 @@ class COCOVehicleDataset(Dataset):
         # Load labels
         img_filename = os.path.basename(img_path)
         label_filename = os.path.splitext(img_filename)[0] + '.txt'
-        label_path = os.path.join(self.label_dir, label_filename)
+        
+        # Try multiple candidate paths for label file
+        candidates = [
+            os.path.join(self.label_dir, label_filename),
+            os.path.join(self.label_dir.replace('val2017', 'train2017'), label_filename),
+            os.path.join(self.label_dir.replace('train2017', 'val2017'), label_filename),
+            os.path.splitext(img_path.replace('/train2017/', '/labels/train2017/').replace('/val2017/', '/labels/val2017/'))[0] + '.txt',
+            os.path.splitext(img_path.replace('/images/', '/labels/'))[0] + '.txt',
+        ]
 
-        # Fallback to auto-inferred path if assigned label_dir file does not exist
-        if not os.path.exists(label_path):
-            alt_path = img_path.replace('train2017', 'labels/train2017').replace('val2017', 'labels/val2017')
-            alt_path = os.path.splitext(alt_path)[0] + '.txt'
-            if os.path.exists(alt_path):
-                label_path = alt_path
+        label_path = None
+        for cand in candidates:
+            if os.path.exists(cand):
+                label_path = cand
+                break
 
-        if os.path.exists(label_path):
+        if label_path is not None and os.path.exists(label_path):
             labels = np.loadtxt(label_path, dtype=np.float32)
             if labels.ndim == 1:
                 labels = labels.reshape(1, -1)  # Single label → (1, 5)
         else:
+            if not hasattr(self, '_warned_missing'):
+                self._warned_missing = 0
+            if self._warned_missing < 5:
+                print(f"\n  ⚠ WARNING: Label file missing for image: {img_path}")
+                print(f"    Searched paths: {candidates[:2]}")
+                self._warned_missing += 1
             labels = np.zeros((0, 5), dtype=np.float32)
 
         return img, labels
