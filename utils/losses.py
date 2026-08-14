@@ -80,6 +80,13 @@ class YOLOLoss(nn.Module):
         total_cls_loss = torch.tensor(0.0, device=device, dtype=dtype)
 
         batch_size = predictions['cls'][0].shape[0]
+        num_scales = len(self.strides)
+
+        # Track total positive matches across all scales/images for
+        # uniform normalization (YOLOX-style). This eliminates the
+        # previous 16× scale imbalance where stride-8 obj_loss was
+        # divided by 2704 but stride-32 only by 169.
+        total_num_pos = 0
 
         # Process each scale
         for scale_idx in range(len(self.strides)):
@@ -120,7 +127,7 @@ class YOLOLoss(nn.Module):
                     # No targets in this image — only objectness loss
                     total_obj_loss += self.bce_obj(
                         obj_pred_flat[batch_idx], obj_target
-                    ).sum()
+                    ).mean()
                     continue
 
                 gt_classes = img_targets[:, 1].long()  # (N_gt,)
@@ -136,8 +143,11 @@ class YOLOLoss(nn.Module):
                     stride,
                 )
 
+                num_pos = len(matched_pred_idx)
+                total_num_pos += num_pos
+
                 # Set objectness targets
-                if len(matched_pred_idx) > 0:
+                if num_pos > 0:
                     # Compute IoU between matched pairs for soft objectness target
                     matched_decoded = decoded_boxes[batch_idx][matched_pred_idx]
                     matched_gt = gt_boxes[matched_gt_idx]
@@ -155,7 +165,7 @@ class YOLOLoss(nn.Module):
                         cxcywh_to_xyxy(matched_gt),
                         CIoU=True,
                     )
-                    total_box_loss += (1.0 - ciou).mean()
+                    total_box_loss += (1.0 - ciou).sum()
 
                     # Classification loss on matched pairs
                     cls_targets_onehot = torch.zeros_like(
@@ -168,18 +178,21 @@ class YOLOLoss(nn.Module):
                     total_cls_loss += self.bce_cls(
                         cls_pred_flat[batch_idx][matched_pred_idx],
                         cls_targets_onehot,
-                    ).sum() / max(len(matched_pred_idx), 1)
+                    ).sum()
 
-                # Objectness loss (all predictions)
+                # Objectness loss (all predictions — use mean to keep scale-invariant)
                 total_obj_loss += self.bce_obj(
                     obj_pred_flat[batch_idx], obj_target
-                ).sum() / max(h * w, 1)
+                ).mean()
 
-        # Normalize by batch size
-        num_scales = len(self.strides)
-        total_box_loss /= max(batch_size, 1)
+        # Normalize by total positive matches (YOLOX-style).
+        # Ensures box_loss, cls_loss, and obj_loss are on comparable scales
+        # regardless of feature map resolution or number of objects.
+        num_pos_norm = max(total_num_pos, 1)
+        total_box_loss /= num_pos_norm
+        total_cls_loss /= num_pos_norm
+        # obj_loss is already mean-per-image; normalize by batch × scales
         total_obj_loss /= max(batch_size * num_scales, 1)
-        total_cls_loss /= max(batch_size, 1)
 
         # Weighted sum
         loss = (

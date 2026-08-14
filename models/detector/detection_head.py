@@ -238,7 +238,7 @@ class DetectionHead(nn.Module):
                 stride = self.strides[i]
 
                 # Lazily create or update grid
-                if self.grids[i] is None or self.grids[i].shape[3] != h:
+                if self.grids[i] is None or self.grids[i].shape[2] != h or self.grids[i].shape[3] != w:
                     self.grids[i] = self._make_grid(
                         h, w, stride, feat.device, feat.dtype
                     )

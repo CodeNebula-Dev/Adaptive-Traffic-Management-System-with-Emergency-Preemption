@@ -168,15 +168,19 @@ def train_one_epoch(model, dataloader, criterion, optimizer, scheduler, scaler,
         # Optimizer step (with gradient accumulation)
         if (batch_idx + 1) % accumulate == 0:
             if use_amp:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
                 scale_before = scaler.get_scale()
-                scaler.step(optimizer)
+                scaler.step(optimizer)  # optimizer.step() first
                 scaler.update()
                 scale_after = scaler.get_scale()
+                # Only step scheduler if optimizer actually stepped (scale didn't decrease)
                 if scale_before <= scale_after:
                     scheduler.step()
             else:
-                optimizer.step()
-                scheduler.step()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+                optimizer.step()      # optimizer.step() first
+                scheduler.step()      # then scheduler.step()
             optimizer.zero_grad()
 
             # Update EMA
@@ -208,18 +212,34 @@ def train_one_epoch(model, dataloader, criterion, optimizer, scheduler, scaler,
 
 
 @torch.no_grad()
-def validate(model, dataloader, criterion, device, config):
+def validate(model, dataloader, criterion, device, config, epoch=0):
     """
     Run validation and compute mAP.
+
+    Args:
+        model: The model to evaluate
+        dataloader: Validation dataloader
+        criterion: Loss function (unused, kept for API compatibility)
+        device: Compute device
+        config: Full config dict
+        epoch: Current epoch number (for adaptive threshold)
 
     Returns:
         dict with mAP@0.5, mAP@0.5:0.95, per-class AP, and loss
     """
     model.eval()
     eval_cfg = config['evaluation']
+    warmup_epochs = config['training'].get('warmup_epochs', 3)
+
+    # Use lower confidence threshold during early training when objectness
+    # scores haven't converged yet. This prevents zero-detection validation.
+    conf_threshold = eval_cfg['conf_threshold']
+    if epoch <= warmup_epochs:
+        conf_threshold = min(conf_threshold, 0.001)
 
     metrics = DetectionMetrics(num_classes=config['model']['num_classes'])
-    total_loss = 0.0
+    total_detections = 0
+    total_gt = 0
     n_batches = 0
 
     pbar = tqdm(dataloader, desc="  Validating", leave=False)
@@ -234,15 +254,30 @@ def validate(model, dataloader, criterion, device, config):
         # Apply NMS
         detections = batch_nms(
             predictions,
-            conf_threshold=eval_cfg['conf_threshold'],
+            conf_threshold=conf_threshold,
             iou_threshold=eval_cfg['iou_threshold'],
             max_detections=eval_cfg['max_detections'],
         )
+
+        # Track detection counts for diagnostics
+        batch_dets = sum(d.shape[0] for d in detections if d is not None)
+        total_detections += batch_dets
+        total_gt += targets.shape[0]
 
         # Update metrics
         metrics.update(detections, targets.cpu())
 
         n_batches += 1
+
+    # Diagnostic logging — critical for debugging mAP=0
+    print(f"  [Val diagnostics] conf_thresh={conf_threshold:.4f}, "
+          f"total_dets={total_detections}, total_gt={total_gt}, "
+          f"batches={n_batches}")
+    if total_detections == 0:
+        # Check raw objectness scores from last batch
+        obj_scores = predictions[..., 4]
+        print(f"  ⚠ ZERO detections! obj_conf range: "
+              f"[{obj_scores.min():.4f}, {obj_scores.max():.4f}]")
 
     # Compute mAP
     results = metrics.compute()
@@ -445,7 +480,7 @@ def main():
         if (epoch + 1) % val_interval == 0:
             # Use raw model during early warmup while EMA is still initializing
             eval_model = ema.ema if (ema and (epoch + 1) > warmup_epochs) else model
-            val_results = validate(eval_model, val_loader, criterion, device, config)
+            val_results = validate(eval_model, val_loader, criterion, device, config, epoch=epoch + 1)
 
             map50 = val_results['mAP50']
             map50_95 = val_results['mAP50_95']
