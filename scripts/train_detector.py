@@ -323,12 +323,14 @@ def main():
     parser.add_argument('--batch-size', type=int, default=None,
                         help='Override batch size')
     parser.add_argument('--resume', type=str, default=None,
-                        help='Path to checkpoint to resume from')
+                        help='Path to checkpoint to resume from (resumes epoch & optimizer)')
+    parser.add_argument('--finetune', type=str, default=None,
+                        help='Path to pretrained checkpoint to fine-tune from (loads weights, fresh optimizer/schedule)')
     args = parser.parse_args()
 
     # ---- Load Config ----
     print("=" * 60)
-    print("ATMS-Net Phase 1 — Vehicle Detector Training")
+    print("ATMS-Net — Vehicle Detector Training & Fine-Tuning")
     print("=" * 60)
 
     with open(args.config, 'r') as f:
@@ -358,6 +360,30 @@ def main():
     if config['training'].get('ema', False):
         ema = ModelEMA(model, decay=config['training'].get('ema_decay', 0.9999))
         print("  → EMA enabled")
+
+    # ---- Fine-tune Weight Loading ----
+    best_map = 0.0
+    start_epoch = 0
+
+    if args.finetune and os.path.exists(args.finetune):
+        print(f"\n[Fine-Tune] Loading pretrained weights from: {args.finetune}")
+        ckpt = torch.load(args.finetune, map_location=device)
+        if 'ema_state_dict' in ckpt:
+            model.load_state_dict(ckpt['ema_state_dict'])
+            print("  → Loaded EMA weights into model")
+        elif 'model_state_dict' in ckpt:
+            model.load_state_dict(ckpt['model_state_dict'])
+            print("  → Loaded model weights")
+        else:
+            model.load_state_dict(ckpt)
+            print("  → Loaded raw weights")
+
+        if ema:
+            ema.ema.load_state_dict(model.state_dict())
+
+        best_map = ckpt.get('best_map', 0.0)
+        print(f"  → Initial checkpoint best mAP@0.5: {best_map:.4f}")
+        print("  → Initialized fresh optimizer & learning rate schedule for fine-tuning")
 
     # ---- Dataset ----
     print("\n[Dataset]")
@@ -427,17 +453,14 @@ def main():
 
     steps_per_epoch = len(train_loader)
     scheduler = build_scheduler(optimizer, config, steps_per_epoch)
-    print(f"  → Scheduler: Cosine annealing (warmup={config['training']['warmup_epochs']} epochs)")
+    print(f"  → Scheduler: Cosine annealing (warmup={config['training']['warmup_epochs']} epochs, lr={config['training']['learning_rate']})")
 
     # ---- Mixed Precision ----
     scaler = GradScaler('cuda', enabled=config['training']['mixed_precision'])
     if config['training']['mixed_precision']:
         print("  → Mixed precision (FP16) enabled")
 
-    # ---- Resume ----
-    start_epoch = 0
-    best_map = 0.0
-
+    # ---- Resume Mode ----
     if args.resume and os.path.exists(args.resume):
         print(f"\n[Resume] Loading checkpoint: {args.resume}")
         ckpt = torch.load(args.resume, map_location=device)

@@ -9,7 +9,7 @@ Usage:
     python scripts/detect.py --weights checkpoints/best.pt --source test.jpg
 
     # Directory of images
-    python scripts/detect.py --weights checkpoints/best.pt --source data/coco/val2017/ --conf-threshold 0.25
+    python scripts/detect.py --weights checkpoints/best.pt --source data/coco/val.txt --max-images 10 --conf-threshold 0.25
 
     # Specific device
     python scripts/detect.py --weights checkpoints/best.pt --source test.jpg --device cuda
@@ -36,13 +36,14 @@ from utils.augmentations import letterbox
 
 # Distinct high-visibility BGR colors for vehicle classes
 CLASS_COLORS = {
-    'car': (0, 230, 60),         # Vibrant Green
-    'motorcycle': (0, 215, 255),  # Yellow
-    'bus': (255, 140, 0),         # Deep Blue / Cyan
-    'truck': (30, 70, 255),       # Bright Red-Orange
+    'car': (0, 230, 60),             # Vibrant Green
+    'motorcycle': (0, 215, 255),      # Yellow
+    'bus': (255, 140, 0),             # Deep Blue / Cyan
+    'truck': (30, 70, 255),           # Bright Red-Orange
+    'unknown_vehicle': (200, 50, 180) # Vibrant Purple (for unclassified real vehicles e.g. rickshaws)
 }
 
-CLASS_NAMES = ['car', 'motorcycle', 'bus', 'truck']
+CLASS_NAMES = ['car', 'motorcycle', 'bus', 'truck', 'unknown_vehicle']
 
 
 def get_device(preferred='auto'):
@@ -111,7 +112,6 @@ def draw_detections(img, detections, conf_threshold=0.25):
         summary_counts: Dict mapping class_name -> count
     """
     annotated = img.copy()
-    h, w = img.shape[:2]
     counts = {name: 0 for name in CLASS_NAMES}
 
     if detections is None or len(detections) == 0:
@@ -134,7 +134,8 @@ def draw_detections(img, detections, conf_threshold=0.25):
         cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness=2)
 
         # Draw modern label tag
-        label_text = f"{class_name} {conf:.1%}"
+        display_label = class_name.replace('_', ' ').capitalize()
+        label_text = f"{display_label} {conf:.1%}"
         font_scale = 0.55
         thickness = 1
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -156,7 +157,8 @@ def draw_detections(img, detections, conf_threshold=0.25):
 
 
 @torch.no_grad()
-def detect_single_image(model, img_path, device, img_size=416, conf_threshold=0.25, iou_threshold=0.45):
+def detect_single_image(model, img_path, device, img_size=416, conf_threshold=0.25,
+                        iou_threshold=0.45, cross_class_suppress=True, cross_class_iou=0.50):
     """
     Run detection on a single image file.
 
@@ -187,12 +189,14 @@ def detect_single_image(model, img_path, device, img_size=416, conf_threshold=0.
     t1 = time.perf_counter()
     infer_time_ms = (t1 - t0) * 1000.0
 
-    # NMS filtering
+    # NMS filtering with cross-class duplicate suppression
     detections = batch_nms(
         raw_predictions,
         conf_threshold=conf_threshold,
         iou_threshold=iou_threshold,
         max_detections=100,
+        cross_class_suppress=cross_class_suppress,
+        cross_class_iou=cross_class_iou,
     )[0]
 
     det_list = []
@@ -219,6 +223,8 @@ def main():
     parser.add_argument('--source', type=str, required=True, help="Path to image file, directory, or .txt image list")
     parser.add_argument('--conf-threshold', type=float, default=0.25, help="Confidence threshold (default: 0.25)")
     parser.add_argument('--iou-threshold', type=float, default=0.45, help="NMS IoU threshold (default: 0.45)")
+    parser.add_argument('--cross-class-suppress', action='store_true', default=True, help="Suppress duplicate boxes of different classes")
+    parser.add_argument('--cross-class-iou', type=float, default=0.50, help="Overlap threshold for duplicate cross-class suppression")
     parser.add_argument('--img-size', type=int, default=416, help="Input resolution (default: 416)")
     parser.add_argument('--device', type=str, default='auto', help="Compute device: auto, cuda, mps, cpu")
     parser.add_argument('--save-dir', type=str, default='runs/detect', help="Directory to save output images")
@@ -229,10 +235,11 @@ def main():
     print("=" * 60)
     print("ATMS-Net Vehicle Detector — Inference Engine")
     print("=" * 60)
-    print(f"  Device:         {device}")
-    print(f"  Conf threshold: {args.conf_threshold}")
-    print(f"  IoU threshold:  {args.iou_threshold}")
-    print(f"  Image size:     {args.img_size}x{args.img_size}")
+    print(f"  Device:               {device}")
+    print(f"  Conf threshold:       {args.conf_threshold}")
+    print(f"  IoU threshold:        {args.iou_threshold}")
+    print(f"  Cross-class suppress: {args.cross_class_suppress} (iou={args.cross_class_iou})")
+    print(f"  Image size:           {args.img_size}x{args.img_size}")
 
     model = load_model(args.weights, device)
 
@@ -274,6 +281,8 @@ def main():
             img_size=args.img_size,
             conf_threshold=args.conf_threshold,
             iou_threshold=args.iou_threshold,
+            cross_class_suppress=args.cross_class_suppress,
+            cross_class_iou=args.cross_class_iou,
         )
 
         if annotated_img is None:
@@ -289,12 +298,13 @@ def main():
         cv2.imwrite(out_path, annotated_img)
 
         # Print detection line
-        count_strs = [f"{v} {k}{'s' if v > 1 else ''}" for k, v in counts.items() if v > 0]
+        count_strs = [f"{v} {k.replace('_', ' ')}{'s' if v > 1 and not k.endswith('s') else ''}" for k, v in counts.items() if v > 0]
         summary_str = ", ".join(count_strs) if count_strs else "No vehicles detected"
         print(f"[{idx}/{len(image_files)}] {img_file.name} ({infer_ms:.1f}ms) → {summary_str}")
 
         for det in det_list:
-            print(f"    • {det['class'].capitalize()}: {det['confidence'] * 100:.1f}% confidence")
+            display_name = det['class'].replace('_', ' ').capitalize()
+            print(f"    • {display_name}: {det['confidence'] * 100:.1f}% confidence")
 
     print("-" * 60)
     avg_fps = len(image_files) / (total_time / 1000.0) if total_time > 0 else 0
