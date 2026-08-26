@@ -231,13 +231,13 @@ def validate(model, dataloader, criterion, device, config, epoch=0):
     eval_cfg = config['evaluation']
     warmup_epochs = config['training'].get('warmup_epochs', 3)
 
-    # Use lower confidence threshold during early training when objectness
-    # scores haven't converged yet. This prevents zero-detection validation.
-    # Note: 0.01 (not 0.001) — lower values cause 1M+ detections that make
-    # metrics computation extremely slow during early epochs.
-    conf_threshold = eval_cfg['conf_threshold']
-    if epoch <= warmup_epochs:
-        conf_threshold = min(conf_threshold, 0.01)
+    # For mAP evaluation, always use a LOW confidence threshold (0.01).
+    # This is standard practice — mAP computation needs all candidate
+    # detections to build the full precision-recall curve. A high threshold
+    # (e.g. 0.25) filters out valid detections and produces mAP=0 when
+    # the model's objectness scores haven't reached that level yet.
+    # The config's conf_threshold (0.25) is for deployment/inference only.
+    conf_threshold = 0.01
 
     metrics = DetectionMetrics(num_classes=config['model']['num_classes'])
     total_detections = 0
