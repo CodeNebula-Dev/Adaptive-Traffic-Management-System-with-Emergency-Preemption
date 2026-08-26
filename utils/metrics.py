@@ -85,30 +85,36 @@ class DetectionMetrics:
             self.all_detections.append(det)
             self.all_targets.append(gt)
 
-    def compute(self):
+    def compute(self, skip_coco_map=False):
         """
         Compute mAP and per-class AP.
+
+        Args:
+            skip_coco_map: If True, skip the expensive mAP@0.5:0.95 computation
+                (useful during early training when detections are noisy and plentiful)
 
         Returns:
             dict with keys:
                 'mAP50': float — mAP at IoU=0.5
-                'mAP50_95': float — COCO-style mAP
+                'mAP50_95': float — COCO-style mAP (0.0 if skipped)
                 'per_class_ap50': dict mapping class_name → AP@0.5
-                'precision': per-class precision at AP@0.5
-                'recall': per-class recall at AP@0.5
         """
         # Compute AP at IoU=0.5
         ap50_per_class = self._compute_ap_at_threshold(0.5)
 
         # Compute COCO-style mAP (average over 0.5 to 0.95)
-        coco_thresholds = np.arange(0.5, 1.0, 0.05)
-        ap_coco = []
-        for thresh in coco_thresholds:
-            ap_at_thresh = self._compute_ap_at_threshold(thresh)
-            ap_coco.append(np.mean(list(ap_at_thresh.values())))
+        # Skip during early epochs to avoid 10x slowdown on noisy detections
+        if skip_coco_map:
+            mAP50_95 = 0.0
+        else:
+            coco_thresholds = np.arange(0.5, 1.0, 0.05)
+            ap_coco = []
+            for thresh in coco_thresholds:
+                ap_at_thresh = self._compute_ap_at_threshold(thresh)
+                ap_coco.append(np.mean(list(ap_at_thresh.values())))
+            mAP50_95 = np.mean(ap_coco)
 
         mAP50 = np.mean(list(ap50_per_class.values()))
-        mAP50_95 = np.mean(ap_coco)
 
         # Per-class results
         per_class = {}
@@ -126,11 +132,8 @@ class DetectionMetrics:
         """
         Compute per-class AP at a specific IoU threshold.
 
-        For each class:
-        1. Collect all predictions and sort by confidence (descending)
-        2. For each prediction, check if it matches a GT box (IoU > threshold)
-        3. Compute precision-recall curve
-        4. Compute AP as area under the smoothed PR curve
+        Uses vectorized IoU computation: computes the full (D, G) IoU matrix
+        in one call per image instead of looping per detection.
 
         Returns:
             dict mapping class_idx → AP value
@@ -167,30 +170,35 @@ class DetectionMetrics:
                 if det_cls.shape[0] == 0:
                     continue
 
-                # Sort by confidence
+                # Sort by confidence (descending)
                 sorted_idx = det_cls[:, 4].argsort(descending=True)
                 det_cls = det_cls[sorted_idx]
 
-                # Match predictions to GT
+                confs = det_cls[:, 4].tolist()
+                all_pred_conf.extend(confs)
+
+                if n_gt == 0:
+                    # All detections are false positives
+                    all_pred_tp.extend([0] * det_cls.shape[0])
+                    continue
+
+                # Vectorized IoU: compute full (D, G) matrix in one call
+                iou_matrix = box_iou(det_cls[:, :4], gt_boxes_cls)  # (D, G)
+
+                # Greedy matching: iterate detections (sorted by conf) and
+                # assign each to its best unmatched GT
                 gt_matched = torch.zeros(n_gt, dtype=torch.bool)
 
                 for d_idx in range(det_cls.shape[0]):
-                    pred_box = det_cls[d_idx, :4].unsqueeze(0)
-                    conf = det_cls[d_idx, 4].item()
+                    ious = iou_matrix[d_idx]  # (G,) — precomputed, no box_iou call
 
-                    all_pred_conf.append(conf)
+                    # Mask already-matched GTs
+                    ious_available = ious.clone()
+                    ious_available[gt_matched] = 0.0
 
-                    if n_gt == 0:
-                        all_pred_tp.append(0)
-                        continue
+                    best_iou, best_gt = ious_available.max(dim=0)
 
-                    # Compute IoU with all unmatched GT boxes
-                    ious = box_iou(pred_box, gt_boxes_cls)[0]  # (N_gt,)
-
-                    # Find best matching GT
-                    best_iou, best_gt = ious.max(dim=0)
-
-                    if best_iou >= iou_threshold and not gt_matched[best_gt]:
+                    if best_iou >= iou_threshold:
                         all_pred_tp.append(1)
                         gt_matched[best_gt] = True
                     else:

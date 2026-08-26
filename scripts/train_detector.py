@@ -233,9 +233,11 @@ def validate(model, dataloader, criterion, device, config, epoch=0):
 
     # Use lower confidence threshold during early training when objectness
     # scores haven't converged yet. This prevents zero-detection validation.
+    # Note: 0.01 (not 0.001) — lower values cause 1M+ detections that make
+    # metrics computation extremely slow during early epochs.
     conf_threshold = eval_cfg['conf_threshold']
     if epoch <= warmup_epochs:
-        conf_threshold = min(conf_threshold, 0.001)
+        conf_threshold = min(conf_threshold, 0.01)
 
     metrics = DetectionMetrics(num_classes=config['model']['num_classes'])
     total_detections = 0
@@ -280,7 +282,10 @@ def validate(model, dataloader, criterion, device, config, epoch=0):
               f"[{obj_scores.min():.4f}, {obj_scores.max():.4f}]")
 
     # Compute mAP
-    results = metrics.compute()
+    # Skip mAP@0.5:0.95 during warmup — it runs the full AP computation 10
+    # extra times and is meaningless when detections are still noisy.
+    skip_coco = (epoch <= warmup_epochs)
+    results = metrics.compute(skip_coco_map=skip_coco)
 
     return results
 
