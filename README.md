@@ -369,7 +369,7 @@ ATMS-Net bridges the critical gap between computer vision perception and real-ti
 | Feature / Dimension | Abbas et al. (2024) [1] | Charoenpong et al. (2024) [2] | Johny & Sharma (2024) [3] | Scribano & Muzzini (2025) [4] | **ATMS-Net (This Work)** |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Detection Architecture** | Faster R-CNN (Two-stage) | Generic CNN | Off-the-shelf YOLOv8 | Off-the-shelf YOLOv8 | **Custom 13.2M Decoupled CSP-PANet** |
-| **Inference Latency** | 🐌 ~8–12 FPS (Slow) | ~15 FPS | ~25 FPS | ~25 FPS | ⚡ **~30 FPS (8.5 ms)** |
+| **Inference Latency** |  ~8–12 FPS (Slow) | ~15 FPS | ~25 FPS | ~25 FPS |  **~30 FPS (8.5 ms)** |
 | **Traffic Density Metric** | Discrete count ($N$) | Discrete count ($N$) | ❌ None | Discrete count ($N$) | **Weighted Spatial PCU Density** |
 | **Emergency Preemption** | ❌ No | ❌ No | ⚠️ Classification only (No signal control) | Heuristic trigger | **Closed-Loop Green-Wave Override** |
 | **Unknown Vehicle Handling** | ❌ No | ❌ No | ❌ No | ❌ No | **Objectness-Entropy Thresholding** |
