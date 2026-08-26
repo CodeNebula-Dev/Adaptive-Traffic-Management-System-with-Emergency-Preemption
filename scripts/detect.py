@@ -216,12 +216,13 @@ def detect_single_image(model, img_path, device, img_size=416, conf_threshold=0.
 def main():
     parser = argparse.ArgumentParser(description="ATMS-Net Vehicle Detection Inference")
     parser.add_argument('--weights', type=str, required=True, help="Path to checkpoint weights (.pt)")
-    parser.add_argument('--source', type=str, required=True, help="Path to image file or directory")
+    parser.add_argument('--source', type=str, required=True, help="Path to image file, directory, or .txt image list")
     parser.add_argument('--conf-threshold', type=float, default=0.25, help="Confidence threshold (default: 0.25)")
     parser.add_argument('--iou-threshold', type=float, default=0.45, help="NMS IoU threshold (default: 0.45)")
     parser.add_argument('--img-size', type=int, default=416, help="Input resolution (default: 416)")
     parser.add_argument('--device', type=str, default='auto', help="Compute device: auto, cuda, mps, cpu")
     parser.add_argument('--save-dir', type=str, default='runs/detect', help="Directory to save output images")
+    parser.add_argument('--max-images', type=int, default=None, help="Max images to process (useful for testing batches)")
     args = parser.parse_args()
 
     device = get_device(args.device)
@@ -237,14 +238,26 @@ def main():
 
     # Collect source images
     source_path = Path(args.source)
+    valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+
     if source_path.is_file():
-        image_files = [source_path]
+        if source_path.suffix.lower() == '.txt':
+            # Text file containing list of image paths (like val.txt)
+            with open(source_path, 'r') as f:
+                image_files = [Path(line.strip()) for line in f if line.strip()]
+        else:
+            image_files = [source_path]
     elif source_path.is_dir():
-        valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
         image_files = [p for p in source_path.iterdir() if p.suffix.lower() in valid_extensions]
     else:
         print(f"Error: Source not found: {args.source}")
         sys.exit(1)
+
+    # Filter only existing files
+    image_files = [p for p in image_files if p.exists()]
+
+    if args.max_images is not None and args.max_images > 0:
+        image_files = image_files[:args.max_images]
 
     print(f"\nFound {len(image_files)} image(s) to process.")
     os.makedirs(args.save_dir, exist_ok=True)
