@@ -17,6 +17,8 @@ A deep learning pipeline for real-time adaptive traffic signal control with inte
 - [Project Milestones](#project-milestones)
 - [Getting Started](#getting-started)
 - [Repository Structure](#repository-structure)
+- [Key Innovations](#key-innovations)
+- [Literature Comparison & Novelty](#literature-comparison--novelty)
 - [References](#references)
 - [License](#license)
 
@@ -353,6 +355,32 @@ ATMS-Net/
 2. **Fairness-weighted RL reward function** — The reward explicitly penalises the maximum queue across lanes (`α × max(queue)` term), enforcing fairness as a hard constraint and preventing degenerate policies that starve sparse lanes.
 
 3. **Safe handoff between RL and deterministic override** — A clean state-refresh protocol ensures the RL controller resumes from fresh state after emergency preemption ends, preventing stale-state value estimation.
+
+4. **Weighted Spatial PCU Density Formulation** — Instead of naive discrete vehicle counts, ATMS-Net converts detections into Passenger Car Units (PCU) reflecting actual physical road occupancy per vehicle type.
+
+5. **Decoupled Out-of-Distribution Handling** — Uses objectness-entropy thresholding to identify and account for non-standard vehicles (e.g., auto-rickshaws, carts) without polluting closed-class signal decisions.
+
+---
+
+## Literature Comparison & Novelty
+
+ATMS-Net bridges the critical gap between computer vision perception and real-time adaptive traffic actuation. The table below highlights how ATMS-Net advances beyond the recent state-of-the-art literature:
+
+| Feature / Dimension | Abbas et al. (2024) [1] | Charoenpong et al. (2024) [2] | Johny & Sharma (2024) [3] | Scribano & Muzzini (2025) [4] | **ATMS-Net (This Work)** |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Detection Architecture** | Faster R-CNN (Two-stage) | Generic CNN | Off-the-shelf YOLOv8 | Off-the-shelf YOLOv8 | **Custom 13.2M Decoupled CSP-PANet** |
+| **Inference Latency** | 🐌 ~8–12 FPS (Slow) | ~15 FPS | ~25 FPS | ~25 FPS | ⚡ **~30 FPS (8.5 ms)** |
+| **Traffic Density Metric** | Discrete count ($N$) | Discrete count ($N$) | ❌ None | Discrete count ($N$) | **Weighted Spatial PCU Density** |
+| **Emergency Preemption** | ❌ No | ❌ No | ⚠️ Classification only (No signal control) | Heuristic trigger | **Closed-Loop Green-Wave Override** |
+| **Unknown Vehicle Handling** | ❌ No | ❌ No | ❌ No | ❌ No | **Objectness-Entropy Thresholding** |
+| **End-to-End Co-Design** | Isolated Perception | Isolated Perception | Isolated EV Tagging | Generic Integration | **Perception + Density + Preemption Controller** |
+
+### Key Differentiators:
+
+1. **Custom Architecture vs. Black-Box Packages**: Rather than wrapping pre-packaged detection APIs, ATMS-Net introduces a purpose-built 13.2M parameter architecture with anchor-free decoupled classification and regression branches using SimOTA dynamic assignment.
+2. **Spatial Occupancy vs. Naive Counting**: A lane with 3 heavy buses causes severe gridlock compared to 3 motorcycles. ATMS-Net models spatial load via:
+   $$\text{Lane Density } (D) = \sum_{i} w_i \cdot N_i = 1.0 N_{\text{car}} + 3.0 N_{\text{bus}} + 2.5 N_{\text{truck}} + 0.5 N_{\text{motorcycle}}$$
+3. **Unified Dual-Engine Control**: Integrates normal-state adaptive signal balancing with safety-critical emergency corridor preemption into a single deterministic/learned hybrid architecture.
 
 ---
 
