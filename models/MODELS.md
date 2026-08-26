@@ -24,7 +24,8 @@
 ```
 models/
 ├── __init__.py                    ← Makes models/ a Python package
-├── MODELS.md                      ← This documentation file
+├── MODELS.md                      ← Function and communication documentation
+├── MODEL_SPECIFICATIONS.md        ← Deep neural net specs, layers, activations, optimizer
 │
 ├── backbone/                      ← Feature extractor (the "eyes")
 │   ├── __init__.py                ← Exports: CSPDarknet
