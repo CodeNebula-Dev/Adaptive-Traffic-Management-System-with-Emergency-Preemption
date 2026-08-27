@@ -216,3 +216,85 @@ The EMA model provides smoother weights and is used for validation and inference
 ### E. Mixed Precision Training (AMP)
 - Uses `torch.cuda.amp.autocast()` with `torch.cuda.amp.GradScaler`.
 - Convolutions run in **FP16** for $2\times$ memory throughput, while gradient updates and master weights remain in **FP32** to prevent numerical underflow.
+
+---
+
+## 6. Multi-Task Shared Backbone & Feature Fusion
+
+A central architectural innovation of ATMS-Net is the **Unified Perception Trunk**:
+
+```
+                         Input Camera Frame (416 x 416)
+                                       │
+                                       ▼
+                   ┌────────────────────────────────────────┐
+                   │   ATMS-Net Shared Backbone (CSPDarknet)│  ← ~8.5 ms (Single Pass)
+                   │        Outputs: P3, P4, P5 Features    │
+                   └───────────────────┬────────────────────┘
+                                       │
+                    ┌──────────────────┴──────────────────┐
+                    ▼                                     ▼
+     ┌─────────────────────────────┐       ┌─────────────────────────────┐
+     │   FPN + PANet Neck (Fused)  │       │  Emergency Vehicle (EV) Head│
+     │  Decoupled 3-Scale Det Head │       │   Global Pool + 2-Layer MLP │
+     │ (Cars, Bikes, Buses, Trucks)│       │(Ambulance, Fire, Police Tag)│
+     └──────────────┬──────────────┘       └──────────────┬──────────────┘
+                    │                                     │
+                    ▼                                     ▼
+         Bounding Boxes + Classes               EV Preemption Flag + Lane
+                    │                                     │
+                    └──────────────────┬──────────────────┘
+                                       │
+                                       ▼
+                     ┌───────────────────────────────────┐
+                     │   Dual-Engine Traffic Controller  │
+                     │  (Adaptive Density + Preemption)  │
+                     └───────────────────────────────────┘
+```
+
+### Key Advantages of Backbone Multi-Task Sharing:
+1. **Zero Redundant Forward Passes**: Rather than executing two separate deep convolutional backbones (one for traffic flow and one for emergency vehicles), a single backbone pass computes feature representations shared across both tasks.
+2. **Surveillance Benchmark Datasets (COCO $\to$ UA-DETRAC)**:
+   - **MS COCO**: Pre-trains general vehicular features, geometry, and cross-scale detection.
+   - **UA-DETRAC**: Gold-standard traffic surveillance dataset comprising 1.2+ million real-world overhead intersection camera frames recorded across sunny, rainy, cloudy, and night conditions.
+   - **HERO Dataset**: Specialised emergency vehicle dataset for fine-tuning the parallel EV classification head.
+
+---
+
+## 7. Weighted Spatial PCU Density Formulation
+
+Existing vision-based traffic light literature (Abbas 2024, Charoenpong 2024, Scribano 2025) relies on **naive discrete vehicle counting ($N$)**, which fails to distinguish between a lane carrying 3 light motorcycles versus 3 heavy articulated buses. 
+
+ATMS-Net introduces a **Physics-Aware Passenger Car Unit (PCU) Spatial Density Formulation**:
+
+### A. Road Capacity Weighting (PCU)
+Every detected bounding box is mapped to its physical road footprint:
+
+$$\text{PCU}_{\text{lane}} = 1.0 \cdot N_{\text{car}} + 0.5 \cdot N_{\text{motorcycle}} + 3.0 \cdot N_{\text{bus}} + 2.5 \cdot N_{\text{truck}} + 0.8 \cdot N_{\text{unknown}}$$
+
+### B. Stop-Line Proximity Density ($D_{\text{lane}}$)
+Vehicles queuing immediately behind the intersection stop-line incur higher gridlock risk than vehicles approaching from a distance:
+
+$$D_{\text{lane}} = \sum_{k \in \text{lane}} \frac{\text{PCU}_k}{\ln\left(1 + \frac{d_k}{d_0}\right)}$$
+
+Where:
+- $d_k$ is the Euclidean distance from the bottom-center of bounding box $k$ to the lane's intersection stop-line.
+- $d_0$ is a normalization distance constant.
+
+---
+
+## 8. Closed-Loop Dual-Engine Controller Brain Architecture
+
+The ATMS-Net Brain operates as a hybrid hierarchical controller combining **deterministic emergency safety** with **adaptive traffic balancing**:
+
+1. **Normal Operating Mode (Adaptive PCU Balancing / Deep Q-Network)**:
+   - Ingests the 4-lane continuous density state vector: $\mathbf{s} = [D_N, D_S, D_E, D_W, \phi_{\text{current}}, \Delta t]$.
+   - Dynamically calculates optimal phase selection and green light duration ($15\text{s} \le \Delta t \le 60\text{s}$).
+   - Employs a **Fairness-Weighted Reward** penalizing maximum queue length:
+     $$r = -\sum_{i \in \{N,S,E,W\}} Q_i - \alpha \cdot \max_{i} (Q_i)$$
+
+2. **Emergency Override Mode (Zero-Latency Preemption)**:
+   - When Head B triggers an emergency detection ($\text{EV}_{\text{detected}} = \text{True}$ on lane $L$), it immediately interrupts normal phase progression.
+   - Sets lane $L$ to **GREEN** while safely switching conflicting lanes to **RED** (following standard yellow clearance intervals).
+   - Once the emergency vehicle clears the junction polygon, control returns seamlessly to the adaptive engine with a state-refresh protocol to prevent value estimation bias.
+

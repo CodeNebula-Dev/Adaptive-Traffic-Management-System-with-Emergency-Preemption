@@ -600,4 +600,41 @@ Tensor(B, 3549, 9)
 
 ---
 
-*This document covers the `models/` folder as of Phase 1. Future phases will add modules here (e.g., emergency vehicle detection head in Phase 3).*
+## 9. Multi-Task Shared Backbone Integration Roadmap
+
+The `CSPDarknet` backbone in `models/backbone/csp_darknet.py` acts as the **central shared perception trunk** across the system:
+
+```
+                          Incoming CCTV Camera Frame
+                                       │
+                                       ▼
+                         ┌───────────────────────────┐
+                         │ CSPDarknet Shared Backbone│
+                         │    (Trained in Phase 1/2) │
+                         └─────────────┬─────────────┘
+                                       │
+                    ┌──────────────────┴──────────────────┐
+                    ▼                                     ▼
+     ┌─────────────────────────────┐       ┌─────────────────────────────┐
+     │   FPN + PANet Neck (Fused)  │       │  Emergency Vehicle (EV) Head│
+     │  Decoupled 3-Scale Det Head │       │  (Phase 3 Parallel Branch)  │
+     │ (Cars, Bikes, Buses, Trucks)│       │(Ambulance, Fire, Police Tag)│
+     └──────────────┬──────────────┘       └──────────────┬──────────────┘
+                    │                                     │
+                    ▼                                     ▼
+         Bounding Boxes + Classes               EV Preemption Flag + Lane
+                    │                                     │
+                    └──────────────────┬──────────────────┘
+                                       │
+                                       ▼
+                     ┌───────────────────────────────────┐
+                     │   Spatial PCU Density Estimator   │
+                     │  & Dual-Engine Traffic Controller │
+                     │   (Adaptive Normal + Preemption)  │
+                     └───────────────────────────────────┘
+```
+
+1. **Phase 1 & 2 (Vehicle Detector)**: Trains `CSPDarknet` + `FPNPANet` + `DecoupledHead` on MS COCO vehicle subset (fine-tuned on UA-DETRAC surveillance data).
+2. **Phase 3 (Emergency Vehicle Head)**: Freezes/tunes `CSPDarknet` to drive a parallel lightweight classification head on the HERO emergency dataset.
+3. **Phase 4 (PCU Density & RL Controller Brain)**: Ingests spatial bounding boxes converted into physics-based Passenger Car Units (PCU) to drive SUMO-coordinated dynamic green-wave traffic signals.
+
