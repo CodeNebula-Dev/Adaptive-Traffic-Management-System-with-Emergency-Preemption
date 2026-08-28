@@ -50,10 +50,10 @@ class ATMSDetector(nn.Module):
         in_channels: Input image channels (default: 3)
     """
 
-    # Vehicle class names for ATMS-Net
-    CLASS_NAMES = ['car', 'motorcycle', 'bus', 'truck']
+    # Vehicle class names for ATMS-Net (expanded to 5 classes for surveillance & non-standard vehicles)
+    CLASS_NAMES = ['car', 'motorcycle', 'bus', 'truck', 'unknown_vehicle']
 
-    def __init__(self, num_classes=4, depth_mul=0.33, width_mul=0.5, in_channels=3):
+    def __init__(self, num_classes=5, depth_mul=0.33, width_mul=0.5, in_channels=3):
         super().__init__()
         self.num_classes = num_classes
 
@@ -99,6 +99,50 @@ class ATMSDetector(nn.Module):
 
         return output
 
+    def load_pretrained_with_class_expansion(self, checkpoint_path, device='cpu'):
+        """
+        Load pretrained weights from a 4-class or 5-class checkpoint.
+        If loading a 4-class checkpoint into a 5-class model:
+          - Loads 100% of backbone, neck, regression, and objectness weights.
+          - Copies class 0..3 weights directly, and initializes class 4 (unknown_vehicle).
+        """
+        print(f"\n[Weight Transfer] Loading pretrained weights from: {checkpoint_path}")
+        ckpt = torch.load(checkpoint_path, map_location=device)
+        
+        state_dict = ckpt.get('ema_state_dict', ckpt.get('model_state_dict', ckpt))
+        current_state = self.state_dict()
+
+        loaded_keys = 0
+        expanded_keys = 0
+
+        for key, current_val in current_state.items():
+            if key in state_dict:
+                src_val = state_dict[key]
+                if current_val.shape == src_val.shape:
+                    current_state[key] = src_val
+                    loaded_keys += 1
+                elif 'cls_pred' in key:
+                    # Class channel expansion (e.g. 4 -> 5 classes)
+                    if key.endswith('.weight'):
+                        # src_val: (4, hidden, 1, 1), current_val: (5, hidden, 1, 1)
+                        n_src = min(src_val.shape[0], current_val.shape[0])
+                        current_state[key][:n_src] = src_val[:n_src]
+                        expanded_keys += 1
+                    elif key.endswith('.bias'):
+                        # src_val: (4,), current_val: (5,)
+                        n_src = min(src_val.shape[0], current_val.shape[0])
+                        current_state[key][:n_src] = src_val[:n_src]
+                        expanded_keys += 1
+
+        self.load_state_dict(current_state)
+        print(f"  ✓ Transferred {loaded_keys} identical weight layers (100% Backbone, Neck & Regression)")
+        if expanded_keys > 0:
+            print(f"  ✓ Successfully expanded {expanded_keys} classification head layers from 4 → {self.num_classes} classes")
+        best_map = ckpt.get('best_map', None)
+        if best_map:
+            print(f"  ✓ Source checkpoint mAP@0.5: {best_map:.4f}")
+        return self
+
     @classmethod
     def from_config(cls, config_path):
         """
@@ -115,7 +159,7 @@ class ATMSDetector(nn.Module):
 
         model_cfg = config.get('model', {})
         return cls(
-            num_classes=model_cfg.get('num_classes', 4),
+            num_classes=model_cfg.get('num_classes', 5),
             depth_mul=model_cfg.get('depth_mul', 0.33),
             width_mul=model_cfg.get('width_mul', 0.5),
             in_channels=model_cfg.get('in_channels', 3),

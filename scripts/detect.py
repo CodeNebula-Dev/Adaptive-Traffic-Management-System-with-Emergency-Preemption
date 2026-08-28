@@ -57,7 +57,7 @@ def get_device(preferred='auto'):
     return torch.device('cpu')
 
 
-def load_model(weights_path, device, num_classes=4):
+def load_model(weights_path, device, num_classes=5):
     """
     Load ATMS-Net model from checkpoint.
     Prefers EMA weights if available for smoother inference.
@@ -65,29 +65,37 @@ def load_model(weights_path, device, num_classes=4):
     print(f"\n[Model] Loading weights from: {weights_path}")
     checkpoint = torch.load(weights_path, map_location=device)
 
-    # Instantiate model
+    # Determine num_classes from config if present
+    target_classes = num_classes
     if 'config' in checkpoint and 'model' in checkpoint['config']:
         m_cfg = checkpoint['config']['model']
-        model = ATMSDetector(
-            num_classes=m_cfg.get('num_classes', num_classes),
-            depth_mul=m_cfg.get('depth_mul', 0.33),
-            width_mul=m_cfg.get('width_mul', 0.5),
-            in_channels=m_cfg.get('in_channels', 3),
-        )
+        target_classes = m_cfg.get('num_classes', num_classes)
+        depth_mul = m_cfg.get('depth_mul', 0.33)
+        width_mul = m_cfg.get('width_mul', 0.5)
+        in_channels = m_cfg.get('in_channels', 3)
     else:
-        model = ATMSDetector(num_classes=num_classes)
+        depth_mul = 0.33
+        width_mul = 0.5
+        in_channels = 3
+
+    model = ATMSDetector(
+        num_classes=target_classes,
+        depth_mul=depth_mul,
+        width_mul=width_mul,
+        in_channels=in_channels,
+    )
 
     # Extract state dict (prioritize EMA weights if present)
-    if 'ema_state_dict' in checkpoint:
-        state_dict = checkpoint['ema_state_dict']
-        print("  → Loaded EMA weights")
-    elif 'model_state_dict' in checkpoint:
-        state_dict = checkpoint['model_state_dict']
-        print("  → Loaded model weights")
-    else:
-        state_dict = checkpoint
+    state_dict = checkpoint.get('ema_state_dict', checkpoint.get('model_state_dict', checkpoint))
 
-    model.load_state_dict(state_dict)
+    # Check if shapes match or if class expansion is needed
+    try:
+        model.load_state_dict(state_dict)
+        print(f"  → Loaded weights successfully ({target_classes} classes)")
+    except RuntimeError:
+        # Fallback to weight surgery / class expansion
+        model.load_pretrained_with_class_expansion(weights_path, device=device)
+
     model.to(device)
     model.eval()
 

@@ -108,6 +108,47 @@ def class_aware_nms(predictions, conf_threshold=0.25, iou_threshold=0.45,
         cross_keep = torchvision.ops.nms(surviving_boxes, surviving_confs, cross_class_iou)
         keep = keep[cross_keep]
 
+    # Spatial Containment De-duplication:
+    # If a smaller box is largely (>70%) nested inside a larger higher-scoring box
+    # (e.g. windshield/wheel sub-box on a car), suppress the internal sub-box.
+    if len(keep) > 1:
+        s_boxes = boxes[keep]
+        s_confs = conf[keep]
+        s_areas = (s_boxes[:, 2] - s_boxes[:, 0]) * (s_boxes[:, 3] - s_boxes[:, 1])
+        
+        # Sort by confidence descending
+        s_order = torch.argsort(s_confs, descending=True)
+        valid_mask = torch.ones(len(keep), dtype=torch.bool, device=boxes.device)
+        
+        for i in range(len(s_order)):
+            idx_i = s_order[i]
+            if not valid_mask[idx_i]:
+                continue
+            box_i = s_boxes[idx_i]
+            
+            for j in range(i + 1, len(s_order)):
+                idx_j = s_order[j]
+                if not valid_mask[idx_j]:
+                    continue
+                box_j = s_boxes[idx_j]
+                
+                # Intersection
+                ix1 = torch.maximum(box_i[0], box_j[0])
+                iy1 = torch.maximum(box_i[1], box_j[1])
+                ix2 = torch.minimum(box_i[2], box_j[2])
+                iy2 = torch.minimum(box_i[3], box_j[3])
+                
+                iw = torch.clamp(ix2 - ix1, min=0.0)
+                ih = torch.clamp(iy2 - iy1, min=0.0)
+                inter = iw * ih
+                
+                area_j = s_areas[idx_j]
+                # If smaller box j is >70% inside higher-confidence box i, suppress j
+                if area_j > 0 and (inter / area_j) > 0.70:
+                    valid_mask[idx_j] = False
+                    
+        keep = keep[valid_mask]
+
     # Limit detections
     keep = keep[:max_detections]
 
@@ -123,7 +164,8 @@ def class_aware_nms(predictions, conf_threshold=0.25, iou_threshold=0.45,
 
 
 def batch_nms(batch_predictions, conf_threshold=0.25, iou_threshold=0.45,
-              max_detections=300, cross_class_suppress=True, cross_class_iou=0.50):
+              max_detections=300, cross_class_suppress=True, cross_class_iou=0.35,
+              unknown_obj_thresh=0.75, unknown_cls_thresh=0.50):
     """
     Apply NMS to a batch of predictions.
 
@@ -133,6 +175,7 @@ def batch_nms(batch_predictions, conf_threshold=0.25, iou_threshold=0.45,
         iou_threshold: NMS IoU threshold
         max_detections: Max detections per image
         cross_class_suppress: Whether to suppress duplicate multi-class overlaps
+        cross_class_iou: Overlap threshold for cross-class suppression (default: 0.35)
 
     Returns:
         results: List of B tensors, each (M_i, 7) or None

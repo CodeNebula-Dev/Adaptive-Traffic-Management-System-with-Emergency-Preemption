@@ -51,6 +51,10 @@ sys.path.insert(0, str(project_root))
 
 from models.detector.yolo_detector import ATMSDetector, ModelEMA
 from data.coco.coco_dataset import COCOVehicleDataset, detection_collate_fn
+try:
+    from data.ua_detrac.uadetrac_dataset import UADetracDataset
+except ImportError:
+    UADetracDataset = None
 from utils.losses import YOLOLoss
 from utils.nms import batch_nms
 from utils.metrics import DetectionMetrics
@@ -60,233 +64,215 @@ def get_device(preferred='auto'):
     """Auto-detect the best available compute device."""
     if preferred != 'auto':
         return torch.device(preferred)
-
     if torch.cuda.is_available():
-        device = torch.device('cuda')
-        print(f"  → Using CUDA: {torch.cuda.get_device_name(0)}")
+        return torch.device('cuda')
     elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        device = torch.device('mps')
-        print(f"  → Using Apple MPS (Metal)")
-    else:
-        device = torch.device('cpu')
-        print(f"  → Using CPU")
-
-    return device
+        return torch.device('mps')
+    return torch.device('cpu')
 
 
 def build_optimizer(model, config):
-    """Create optimizer with per-parameter weight decay handling."""
-    training_cfg = config['training']
+    """
+    Build optimizer with parameter group separation.
 
-    # Separate parameters: no weight decay for bias and BatchNorm
-    pg0, pg1, pg2 = [], [], []  # BN weights, Conv weights, biases
+    Separates parameters into 3 groups:
+        1. BatchNorm weights and biases: NO weight decay
+        2. Conv weights: WITH weight decay
+        3. Conv biases: NO weight decay
+    """
+    train_cfg = config['training']
+    base_lr = train_cfg['learning_rate']
+    weight_decay = train_cfg.get('weight_decay', 0.0005)
+
+    bn_params = []
+    weight_params = []
+    bias_params = []
+
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        if '.bias' in name:
-            pg2.append(param)
-        elif '.bn.' in name or '.weight' in name and param.ndim == 1:
-            pg0.append(param)
+        if 'bn' in name or 'norm' in name:
+            bn_params.append(param)
+        elif 'bias' in name:
+            bias_params.append(param)
         else:
-            pg1.append(param)
+            weight_params.append(param)
 
-    optimizer = optim.SGD(
-        pg0, lr=training_cfg['learning_rate'],
-        momentum=training_cfg['momentum'], nesterov=True,
-    )
-    optimizer.add_param_group({'params': pg1, 'weight_decay': training_cfg['weight_decay']})
-    optimizer.add_param_group({'params': pg2})  # biases, no weight decay
+    param_groups = [
+        {'params': bn_params, 'weight_decay': 0.0, 'lr': base_lr},
+        {'params': weight_params, 'weight_decay': weight_decay, 'lr': base_lr},
+        {'params': bias_params, 'weight_decay': 0.0, 'lr': base_lr},
+    ]
 
-    print(f"  → Optimizer: SGD (lr={training_cfg['learning_rate']}, "
-          f"momentum={training_cfg['momentum']}, wd={training_cfg['weight_decay']})")
-    print(f"  → Parameter groups: BN={len(pg0)}, Conv={len(pg1)}, Bias={len(pg2)}")
+    opt_name = train_cfg.get('optimizer', 'sgd').lower()
+    if opt_name == 'sgd':
+        optimizer = optim.SGD(
+            param_groups,
+            lr=base_lr,
+            momentum=train_cfg.get('momentum', 0.937),
+            nesterov=True,
+        )
+    elif opt_name == 'adam':
+        optimizer = optim.Adam(param_groups, lr=base_lr)
+    elif opt_name == 'adamw':
+        optimizer = optim.AdamW(param_groups, lr=base_lr)
+    else:
+        raise ValueError(f"Unknown optimizer: {opt_name}")
+
+    print(f"  → Optimizer: {opt_name.upper()} (lr={base_lr}, momentum={train_cfg.get('momentum', 0.937)}, wd={weight_decay})")
+    print(f"  → Parameter groups: BN={len(bn_params)}, Conv={len(weight_params)}, Bias={len(bias_params)}")
 
     return optimizer
 
 
 def build_scheduler(optimizer, config, steps_per_epoch):
-    """Create cosine annealing LR scheduler with warmup."""
-    training_cfg = config['training']
-    total_steps = training_cfg['epochs'] * steps_per_epoch
-    warmup_steps = training_cfg['warmup_epochs'] * steps_per_epoch
-    min_lr_ratio = training_cfg.get('min_lr_ratio', 0.01)
+    """Build a learning rate scheduler with warmup and cosine annealing."""
+    train_cfg = config['training']
+    total_epochs = train_cfg['epochs']
+    warmup_epochs = train_cfg.get('warmup_epochs', 3)
+    warmup_steps = warmup_epochs * steps_per_epoch
+    total_steps = total_epochs * steps_per_epoch
+    min_lr_ratio = train_cfg.get('min_lr_ratio', 0.01)
+    warmup_lr_ratio = train_cfg.get('warmup_lr_ratio', 0.1)
 
-    def lr_lambda(step):
-        if step < warmup_steps:
-            # Linear warmup
-            return training_cfg.get('warmup_lr_ratio', 0.1) + \
-                   (1 - training_cfg.get('warmup_lr_ratio', 0.1)) * step / warmup_steps
+    def lr_lambda(current_step):
+        if current_step < warmup_steps:
+            alpha = current_step / max(1, warmup_steps)
+            return warmup_lr_ratio + (1.0 - warmup_lr_ratio) * alpha
         else:
-            # Cosine annealing
-            progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
-            return min_lr_ratio + (1 - min_lr_ratio) * 0.5 * (1 + math.cos(math.pi * progress))
+            progress = (current_step - warmup_steps) / max(1, total_steps - warmup_steps)
+            return min_lr_ratio + 0.5 * (1.0 - min_lr_ratio) * (1.0 + math.cos(math.pi * progress))
 
-    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-    return scheduler
+    return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 
 def train_one_epoch(model, dataloader, criterion, optimizer, scheduler, scaler,
                     device, epoch, config, ema=None):
-    """
-    Train for one epoch.
-
-    Returns:
-        dict with average loss components
-    """
+    """Train the model for one epoch."""
     model.train()
-    training_cfg = config['training']
-    log_interval = config['logging'].get('log_interval', 50)
-    accumulate = training_cfg.get('accumulate_grad', 1)
-    use_amp = training_cfg.get('mixed_precision', False) and device.type == 'cuda'
-
-    total_box = 0.0
-    total_obj = 0.0
-    total_cls = 0.0
-    total_loss = 0.0
-    n_batches = 0
+    total_loss_meter = AverageMeter('Total Loss')
+    box_loss_meter = AverageMeter('Box Loss')
+    obj_loss_meter = AverageMeter('Obj Loss')
+    cls_loss_meter = AverageMeter('Cls Loss')
 
     pbar = tqdm(dataloader, desc=f"Epoch {epoch}", leave=True)
-    optimizer.zero_grad()
+    accumulate_grad = config['training'].get('accumulate_grad', 1)
 
     for batch_idx, (images, targets) in enumerate(pbar):
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
-        # Forward pass (with optional mixed precision)
-        if use_amp:
-            with autocast('cuda', enabled=use_amp):
-                predictions = model(images)
-                loss_dict = criterion(predictions, targets)
-                loss = loss_dict['loss'] / accumulate
-            scaler.scale(loss).backward()
-        else:
+        with autocast('cuda', enabled=config['training']['mixed_precision']):
             predictions = model(images)
             loss_dict = criterion(predictions, targets)
-            loss = loss_dict['loss'] / accumulate
-            loss.backward()
+            total_loss = loss_dict['total_loss'] / accumulate_grad
 
-        # Optimizer step (with gradient accumulation)
-        if (batch_idx + 1) % accumulate == 0:
-            if use_amp:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
-                scale_before = scaler.get_scale()
-                scaler.step(optimizer)  # optimizer.step() first
-                scaler.update()
-                scale_after = scaler.get_scale()
-                # Only step scheduler if optimizer actually stepped (scale didn't decrease)
-                if scale_before <= scale_after:
-                    scheduler.step()
-            else:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
-                optimizer.step()      # optimizer.step() first
-                scheduler.step()      # then scheduler.step()
+        scaler.scale(total_loss).backward()
+
+        if (batch_idx + 1) % accumulate_grad == 0 or (batch_idx + 1) == len(dataloader):
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad()
 
-            # Update EMA
             if ema is not None:
                 ema.update(model)
 
-        # Accumulate losses
-        total_box += loss_dict['box_loss'].item()
-        total_obj += loss_dict['obj_loss'].item()
-        total_cls += loss_dict['cls_loss'].item()
-        total_loss += loss_dict['loss'].item()
-        n_batches += 1
+        scheduler.step()
 
-        # Update progress bar
+        total_loss_meter.update(loss_dict['total_loss'].item() * accumulate_grad, images.size(0))
+        box_loss_meter.update(loss_dict['box_loss'].item(), images.size(0))
+        obj_loss_meter.update(loss_dict['obj_loss'].item(), images.size(0))
+        cls_loss_meter.update(loss_dict['cls_loss'].item(), images.size(0))
+
         pbar.set_postfix({
-            'loss': f"{loss_dict['loss'].item():.4f}",
-            'box': f"{loss_dict['box_loss'].item():.4f}",
-            'obj': f"{loss_dict['obj_loss'].item():.4f}",
-            'cls': f"{loss_dict['cls_loss'].item():.4f}",
+            'loss': f"{total_loss_meter.avg:.4f}",
+            'box': f"{box_loss_meter.avg:.4f}",
+            'obj': f"{obj_loss_meter.avg:.4f}",
+            'cls': f"{cls_loss_meter.avg:.4f}",
             'lr': f"{optimizer.param_groups[0]['lr']:.6f}",
         })
 
     return {
-        'box_loss': total_box / max(n_batches, 1),
-        'obj_loss': total_obj / max(n_batches, 1),
-        'cls_loss': total_cls / max(n_batches, 1),
-        'total_loss': total_loss / max(n_batches, 1),
+        'total_loss': total_loss_meter.avg,
+        'box_loss': box_loss_meter.avg,
+        'obj_loss': obj_loss_meter.avg,
+        'cls_loss': cls_loss_meter.avg,
     }
 
 
 @torch.no_grad()
 def validate(model, dataloader, criterion, device, config, epoch=0):
-    """
-    Run validation and compute mAP.
-
-    Args:
-        model: The model to evaluate
-        dataloader: Validation dataloader
-        criterion: Loss function (unused, kept for API compatibility)
-        device: Compute device
-        config: Full config dict
-        epoch: Current epoch number (for adaptive threshold)
-
-    Returns:
-        dict with mAP@0.5, mAP@0.5:0.95, per-class AP, and loss
-    """
+    """Run validation and compute vectorized mAP@0.5 and mAP@0.5:0.95."""
     model.eval()
-    eval_cfg = config['evaluation']
-    warmup_epochs = config['training'].get('warmup_epochs', 3)
+    num_classes = config['model']['num_classes']
+    class_names = getattr(model, 'CLASS_NAMES', ['car', 'motorcycle', 'bus', 'truck', 'unknown_vehicle'])[:num_classes]
 
-    # For mAP evaluation, always use a LOW confidence threshold (0.01).
-    # This is standard practice — mAP computation needs all candidate
-    # detections to build the full precision-recall curve. A high threshold
-    # (e.g. 0.25) filters out valid detections and produces mAP=0 when
-    # the model's objectness scores haven't reached that level yet.
-    # The config's conf_threshold (0.25) is for deployment/inference only.
-    conf_threshold = 0.01
+    eval_cfg = config.get('evaluation', {})
+    conf_thresh = eval_cfg.get('conf_threshold', 0.01)
+    iou_thresh = eval_cfg.get('iou_threshold', 0.45)
+    max_dets = eval_cfg.get('max_detections', 300)
 
-    metrics = DetectionMetrics(num_classes=config['model']['num_classes'])
+    metrics = DetectionMetrics(
+        num_classes=num_classes,
+        class_names=class_names,
+        iou_thresholds=None,
+        conf_threshold=conf_thresh,
+    )
+
     total_detections = 0
-    total_gt = 0
-    n_batches = 0
+    total_ground_truths = 0
 
-    pbar = tqdm(dataloader, desc="  Validating", leave=False)
-
-    for images, targets in pbar:
+    for images, targets in dataloader:
         images = images.to(device, non_blocking=True)
-        targets = targets.to(device, non_blocking=True)
+        img_h, img_w = images.shape[2:]
 
-        # Forward pass in eval mode → decoded predictions
-        predictions = model(images)  # (B, N, 5+C)
-
-        # Apply NMS
-        detections = batch_nms(
+        predictions = model(images)
+        batch_detections = batch_nms(
             predictions,
-            conf_threshold=conf_threshold,
-            iou_threshold=eval_cfg['iou_threshold'],
-            max_detections=eval_cfg['max_detections'],
+            conf_threshold=conf_thresh,
+            iou_threshold=iou_thresh,
+            max_detections=max_dets,
         )
 
-        # Track detection counts for diagnostics
-        batch_dets = sum(d.shape[0] for d in detections if d is not None)
-        total_detections += batch_dets
-        total_gt += targets.shape[0]
+        for b_idx in range(images.size(0)):
+            dets = batch_detections[b_idx]
+            gt_mask = targets[:, 0] == b_idx
+            img_targets = targets[gt_mask]
 
-        # Update metrics
-        metrics.update(detections, targets.cpu())
+            if dets is not None and len(dets) > 0:
+                pred_boxes = dets[:, :4].cpu()
+                pred_scores = dets[:, 4].cpu()
+                pred_labels = dets[:, 6].long().cpu()
+                total_detections += len(dets)
+            else:
+                pred_boxes = torch.zeros((0, 4))
+                pred_scores = torch.zeros((0,))
+                pred_labels = torch.zeros((0,), dtype=torch.long)
 
-        n_batches += 1
+            if len(img_targets) > 0:
+                gt_cx = img_targets[:, 2] * img_w
+                gt_cy = img_targets[:, 3] * img_h
+                gt_w = img_targets[:, 4] * img_w
+                gt_h = img_targets[:, 5] * img_h
 
-    # Diagnostic logging — critical for debugging mAP=0
-    print(f"  [Val diagnostics] conf_thresh={conf_threshold:.4f}, "
-          f"total_dets={total_detections}, total_gt={total_gt}, "
-          f"batches={n_batches}")
-    if total_detections == 0:
-        # Check raw objectness scores from last batch
-        obj_scores = predictions[..., 4]
-        print(f"  ⚠ ZERO detections! obj_conf range: "
-              f"[{obj_scores.min():.4f}, {obj_scores.max():.4f}]")
+                gt_x1 = gt_cx - gt_w / 2
+                gt_y1 = gt_cy - gt_h / 2
+                gt_x2 = gt_cx + gt_w / 2
+                gt_y2 = gt_cy + gt_h / 2
 
-    # Compute mAP
-    # Skip mAP@0.5:0.95 during warmup — it runs the full AP computation 10
-    # extra times and is meaningless when detections are still noisy.
-    skip_coco = (epoch <= warmup_epochs)
-    results = metrics.compute(skip_coco_map=skip_coco)
+                gt_boxes = torch.stack([gt_x1, gt_y1, gt_x2, gt_y2], dim=1).cpu()
+                gt_labels = img_targets[:, 1].long().cpu()
+                total_ground_truths += len(img_targets)
+            else:
+                gt_boxes = torch.zeros((0, 4))
+                gt_labels = torch.zeros((0,), dtype=torch.long)
 
+            metrics.update(pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels)
+
+    results = metrics.compute()
+    print(f"  [Val diagnostics] conf_thresh={conf_thresh:.4f}, total_dets={total_detections}, total_gt={total_ground_truths}, batches={len(dataloader)}")
     return results
 
 
@@ -312,8 +298,27 @@ def save_checkpoint(model, ema, optimizer, scheduler, epoch, best_map, config, f
     print(f"  → Saved checkpoint: {filepath}")
 
 
+class AverageMeter:
+    """Computes and stores the average and current value."""
+    def __init__(self, name):
+        self.name = name
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
 def main():
-    parser = argparse.ArgumentParser(description='ATMS-Net Phase 1: Train Vehicle Detector')
+    parser = argparse.ArgumentParser(description='ATMS-Net Phase 1 & 2.5: Train Vehicle Detector')
     parser.add_argument('--config', type=str, default='configs/detector.yaml',
                         help='Path to training config YAML')
     parser.add_argument('--device', type=str, default='auto',
@@ -352,8 +357,17 @@ def main():
     # ---- Model ----
     print("\n[Model]")
     model = ATMSDetector.from_config(args.config)
+    model.to(device)
+
+    # ---- Fine-tune Weight Loading (with class expansion support) ----
+    best_map = 0.0
+    start_epoch = 0
+
+    if args.finetune and os.path.exists(args.finetune):
+        model.load_pretrained_with_class_expansion(args.finetune, device=device)
+        print("  → Initialized fresh optimizer & learning rate schedule for fine-tuning")
+
     model.summary()
-    model = model.to(device)
 
     # ---- EMA ----
     ema = None
@@ -361,59 +375,56 @@ def main():
         ema = ModelEMA(model, decay=config['training'].get('ema_decay', 0.9999))
         print("  → EMA enabled")
 
-    # ---- Fine-tune Weight Loading ----
-    best_map = 0.0
-    start_epoch = 0
-
-    if args.finetune and os.path.exists(args.finetune):
-        print(f"\n[Fine-Tune] Loading pretrained weights from: {args.finetune}")
-        ckpt = torch.load(args.finetune, map_location=device)
-        if 'ema_state_dict' in ckpt:
-            model.load_state_dict(ckpt['ema_state_dict'])
-            print("  → Loaded EMA weights into model")
-        elif 'model_state_dict' in ckpt:
-            model.load_state_dict(ckpt['model_state_dict'])
-            print("  → Loaded model weights")
-        else:
-            model.load_state_dict(ckpt)
-            print("  → Loaded raw weights")
-
-        if ema:
-            ema.ema.load_state_dict(model.state_dict())
-
-        best_map = ckpt.get('best_map', 0.0)
-        print(f"  → Initial checkpoint best mAP@0.5: {best_map:.4f}")
-        print("  → Initialized fresh optimizer & learning rate schedule for fine-tuning")
-
     # ---- Dataset ----
     print("\n[Dataset]")
     data_cfg = config['data']
+    dataset_type = data_cfg.get('dataset_type', 'coco').lower()
 
-    # Check if data files exist
     if not os.path.exists(data_cfg['train_list']):
         print(f"\n  ⚠ Training data not found: {data_cfg['train_list']}")
-        print(f"  Run this first: python data/coco/download_coco.py --data-dir {data_cfg['data_dir']}")
+        if dataset_type == 'uadetrac':
+            print(f"  Run this first: python data/ua_detrac/download_uadetrac.py --data-dir {data_cfg['data_dir']}")
+        else:
+            print(f"  Run this first: python data/coco/download_coco.py --data-dir {data_cfg['data_dir']}")
         print(f"\n  For a quick smoke test without data, use: --epochs 0")
         sys.exit(1)
 
-    train_label_dir = data_cfg.get('train_label_dir', data_cfg.get('label_dir', 'data/coco/labels/train2017'))
-    val_label_dir = data_cfg.get('val_label_dir', data_cfg.get('label_dir', 'data/coco/labels/train2017').replace('train2017', 'val2017'))
+    if dataset_type == 'uadetrac' and UADetracDataset is not None:
+        print("  → Ingesting UA-DETRAC Traffic Surveillance Dataset (5 classes)")
+        train_dataset = UADetracDataset(
+            img_list=data_cfg['train_list'],
+            label_dir=data_cfg.get('label_dir', 'data/ua_detrac/labels'),
+            img_size=config['model']['img_size'],
+            augment=True,
+            mosaic_prob=config['augmentation'].get('mosaic_prob', 0.4),
+            num_classes=config['model']['num_classes'],
+        )
+        val_dataset = UADetracDataset(
+            img_list=data_cfg['val_list'],
+            label_dir=data_cfg.get('label_dir', 'data/ua_detrac/labels'),
+            img_size=config['model']['img_size'],
+            augment=False,
+            mosaic_prob=0.0,
+            num_classes=config['model']['num_classes'],
+        )
+    else:
+        train_label_dir = data_cfg.get('train_label_dir', data_cfg.get('label_dir', 'data/coco/labels/train2017'))
+        val_label_dir = data_cfg.get('val_label_dir', data_cfg.get('label_dir', 'data/coco/labels/train2017').replace('train2017', 'val2017'))
 
-    train_dataset = COCOVehicleDataset(
-        img_list=data_cfg['train_list'],
-        label_dir=train_label_dir,
-        img_size=config['model']['img_size'],
-        augment=True,
-        mosaic_prob=config['augmentation'].get('mosaic_prob', 0.5),
-    )
-
-    val_dataset = COCOVehicleDataset(
-        img_list=data_cfg['val_list'],
-        label_dir=val_label_dir,
-        img_size=config['model']['img_size'],
-        augment=False,  # No augmentation for validation
-        mosaic_prob=0.0,
-    )
+        train_dataset = COCOVehicleDataset(
+            img_list=data_cfg['train_list'],
+            label_dir=train_label_dir,
+            img_size=config['model']['img_size'],
+            augment=True,
+            mosaic_prob=config['augmentation'].get('mosaic_prob', 0.5),
+        )
+        val_dataset = COCOVehicleDataset(
+            img_list=data_cfg['val_list'],
+            label_dir=val_label_dir,
+            img_size=config['model']['img_size'],
+            augment=False,
+            mosaic_prob=0.0,
+        )
 
     train_loader = DataLoader(
         train_dataset,
