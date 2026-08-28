@@ -203,6 +203,7 @@ class YOLOLoss(nn.Module):
 
         return {
             'loss': loss,
+            'total_loss': loss,
             'box_loss': total_box_loss.detach(),
             'obj_loss': total_obj_loss.detach(),
             'cls_loss': total_cls_loss.detach(),

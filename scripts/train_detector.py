@@ -165,9 +165,10 @@ def train_one_epoch(model, dataloader, criterion, optimizer, scheduler, scaler,
         with autocast('cuda', enabled=config['training']['mixed_precision']):
             predictions = model(images)
             loss_dict = criterion(predictions, targets)
-            total_loss = loss_dict['total_loss'] / accumulate_grad
+            loss_val = loss_dict.get('loss', loss_dict.get('total_loss'))
+            loss = loss_val / accumulate_grad
 
-        scaler.scale(total_loss).backward()
+        scaler.scale(loss).backward()
 
         if (batch_idx + 1) % accumulate_grad == 0 or (batch_idx + 1) == len(dataloader):
             scaler.unscale_(optimizer)
@@ -181,7 +182,7 @@ def train_one_epoch(model, dataloader, criterion, optimizer, scheduler, scaler,
 
         scheduler.step()
 
-        total_loss_meter.update(loss_dict['total_loss'].item() * accumulate_grad, images.size(0))
+        total_loss_meter.update(loss_val.item(), images.size(0))
         box_loss_meter.update(loss_dict['box_loss'].item(), images.size(0))
         obj_loss_meter.update(loss_dict['obj_loss'].item(), images.size(0))
         cls_loss_meter.update(loss_dict['cls_loss'].item(), images.size(0))
