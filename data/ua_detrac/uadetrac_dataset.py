@@ -44,13 +44,11 @@ class UADetracDataset(Dataset):
         self.num_classes = num_classes
         self.label_dir = label_dir
 
-        # Read image list
+        # Read image list directly (instant load)
         with open(img_list, 'r') as f:
             self.img_paths = [line.strip() for line in f if line.strip()]
 
-        # Pre-filter existing images
-        self.img_paths = [p for p in self.img_paths if os.path.exists(p)]
-        print(f"  → Loaded {len(self.img_paths)} images from {img_list}")
+        print(f"  → Loaded {len(self.img_paths):,} images from {img_list}", flush=True)
 
     def __len__(self):
         return len(self.img_paths)
@@ -60,34 +58,24 @@ class UADetracDataset(Dataset):
         path = self.img_paths[index]
         img = cv2.imread(path)
         if img is None:
-            # Generate black canvas fallback if corrupt
+            # Fallback canvas if missing
             img = np.zeros((self.img_size, self.img_size, 3), dtype=np.uint8)
         return img, path
 
     def _load_labels(self, img_path):
         """
-        Load YOLO format labels for a given image.
+        Load YOLO format labels for a given image directly.
         Format per line: class_id cx cy w h (all in [0, 1])
         """
-        stem = Path(img_path).stem
-        parent_name = Path(img_path).parent.name
-        
-        # Try direct match or sequence-prefixed match
-        candidate_names = [
-            f"{stem}.txt",
-            f"{parent_name}_{stem}.txt",
-            f"{parent_name}_{Path(img_path).name}".replace('.jpg', '.txt').replace('.png', '.txt'),
-        ]
+        p = Path(img_path)
+        label_file = f"{p.parent.name}_{p.stem}.txt"
+        label_path = os.path.join(self.label_dir, label_file)
 
-        label_path = None
-        for cname in candidate_names:
-            p = os.path.join(self.label_dir, cname)
-            if os.path.exists(p):
-                label_path = p
-                break
-
-        if label_path is None or not os.path.exists(label_path):
-            return np.zeros((0, 5), dtype=np.float32)
+        if not os.path.exists(label_path):
+            # Fallback to direct stem name
+            label_path = os.path.join(self.label_dir, f"{p.stem}.txt")
+            if not os.path.exists(label_path):
+                return np.zeros((0, 5), dtype=np.float32)
 
         boxes = []
         with open(label_path, 'r') as f:
@@ -96,7 +84,6 @@ class UADetracDataset(Dataset):
                 if len(parts) >= 5:
                     cls_id = int(parts[0])
                     cx, cy, w, h = map(float, parts[1:5])
-                    # Filter out-of-bound or zero area boxes
                     if w > 0.001 and h > 0.001:
                         boxes.append([cls_id, cx, cy, w, h])
 
