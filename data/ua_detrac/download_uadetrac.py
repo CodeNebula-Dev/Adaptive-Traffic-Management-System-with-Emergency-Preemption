@@ -127,7 +127,22 @@ def process_uadetrac_directory(data_dir, output_dir=None, val_ratio=0.15):
     labels_dir = os.path.join(output_dir, 'labels')
     os.makedirs(labels_dir, exist_ok=True)
 
-    xml_files = glob.glob(os.path.join(data_dir, '**', '*.xml'), recursive=True)
+    print(f"Scanning for UA-DETRAC annotations in: {data_dir}")
+
+    # Fast direct discovery of XML directories
+    xml_files = []
+    for candidate_dir in [
+        os.path.join(data_dir, 'DETRAC-Train-Annotations-XML'),
+        os.path.join(data_dir, 'DETRAC-Test-Annotations-XML'),
+        os.path.join(data_dir, 'DETRAC-Annotations-XML'),
+        data_dir,
+    ]:
+        if os.path.exists(candidate_dir):
+            xml_files.extend(glob.glob(os.path.join(candidate_dir, '*.xml')))
+
+    if not xml_files:
+        xml_files = glob.glob(os.path.join(data_dir, '**', '*.xml'), recursive=True)
+
     if not xml_files:
         # Check for pre-existing YOLO labels
         txt_labels = glob.glob(os.path.join(data_dir, '**', '*.txt'), recursive=True)
@@ -137,16 +152,19 @@ def process_uadetrac_directory(data_dir, output_dir=None, val_ratio=0.15):
         print(f"Found {len(img_files)} images and {len(txt_labels)} text files in {data_dir}.")
         return create_train_val_splits(img_files, output_dir, val_ratio)
 
-    print(f"Found {len(xml_files)} UA-DETRAC XML annotation sequences.")
+    print(f"✓ Found {len(xml_files)} UA-DETRAC XML sequence files.")
     all_processed_images = []
     class_stats = defaultdict(int)
 
-    for xml_path in xml_files:
+    for idx, xml_path in enumerate(xml_files, 1):
         seq_name = Path(xml_path).stem.replace('_v3', '')
         frame_dict = parse_detrac_xml(xml_path)
 
-        # Look for sequence image directory
+        # Look for sequence image directory across all standard layouts
         img_seq_dirs = [
+            os.path.join(data_dir, 'DETRAC-Images', seq_name),
+            os.path.join(data_dir, 'DETRAC-Images', 'Insight-MVT_Annotation_Train', seq_name),
+            os.path.join(data_dir, 'DETRAC-Images', 'Insight-MVT_Annotation_Test', seq_name),
             os.path.join(data_dir, 'Insight-MVT_Annotation_Train', seq_name),
             os.path.join(data_dir, 'Insight-MVT_Annotation_Test', seq_name),
             os.path.join(data_dir, 'images', seq_name),
@@ -159,12 +177,24 @@ def process_uadetrac_directory(data_dir, output_dir=None, val_ratio=0.15):
                 active_img_dir = p
                 break
 
+        # Fallback: search anywhere inside DETRAC-Images
+        if active_img_dir is None:
+            detrac_img_root = os.path.join(data_dir, 'DETRAC-Images')
+            if os.path.exists(detrac_img_root):
+                for root, dirs, _ in os.walk(detrac_img_root):
+                    if seq_name in dirs:
+                        active_img_dir = os.path.join(root, seq_name)
+                        break
+
         if active_img_dir is None:
             continue
 
-        # Process frames
+        # Process frames in sequence
         img_files = sorted(glob.glob(os.path.join(active_img_dir, '*.jpg')) + \
                            glob.glob(os.path.join(active_img_dir, '*.png')))
+
+        if idx % 5 == 0 or idx == len(xml_files):
+            print(f"  [{idx}/{len(xml_files)}] Processing sequence: {seq_name} ({len(img_files)} frames)")
 
         # Resolution standard for UA-DETRAC is 960x540
         img_w, img_h = 960.0, 540.0
