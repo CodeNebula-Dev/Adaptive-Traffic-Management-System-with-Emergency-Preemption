@@ -30,10 +30,14 @@ class DetectionMetrics:
         print(f"mAP@0.5: {results['mAP50']:.4f}")
     """
 
-    CLASS_NAMES = ['car', 'motorcycle', 'bus', 'truck']
+    CLASS_NAMES = ['car', 'motorcycle', 'bus', 'truck', 'unknown_vehicle']
 
-    def __init__(self, num_classes=4):
+    def __init__(self, num_classes=5, class_names=None, **kwargs):
         self.num_classes = num_classes
+        if class_names is not None:
+            self.class_names = list(class_names)
+        else:
+            self.class_names = self.CLASS_NAMES[:num_classes]
         self.iouv = torch.linspace(0.5, 0.95, 10)  # 10 IoU thresholds for COCO evaluation
 
         # Accumulate per-image results
@@ -45,15 +49,27 @@ class DetectionMetrics:
         self.all_detections.clear()
         self.all_targets.clear()
 
-    def update(self, detections, targets, img_size=None):
+    def update(self, *args, **kwargs):
         """
-        Add a batch of detection results.
+        Add detection results and targets.
 
-        Args:
-            detections: List of B tensors (M_i, 7) or None from batch_nms
-            targets: Tensor (N_total, 6) [batch_idx, cls, cx, cy, w, h]
-                in absolute pixel coordinates
+        Supports two calling patterns:
+          1. Batch mode: update(detections, targets)
+             - detections: List of B tensors (M_i, 7) or None from batch_nms
+             - targets: Tensor (N_total, 6) [batch_idx, cls, cx, cy, w, h] in absolute pixel coords
+          2. Single image mode: update(pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels)
         """
+        if len(args) == 2 or ('detections' in kwargs and 'targets' in kwargs):
+            detections = args[0] if len(args) > 0 else kwargs['detections']
+            targets = args[1] if len(args) > 1 else kwargs['targets']
+            return self._update_batch(detections, targets)
+        elif len(args) == 5:
+            pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels = args
+            return self._update_single(pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels)
+        else:
+            raise ValueError(f"DetectionMetrics.update expected 2 or 5 arguments, got {len(args)}")
+
+    def _update_batch(self, detections, targets):
         batch_size = len(detections)
 
         for batch_idx in range(batch_size):
@@ -79,6 +95,25 @@ class DetectionMetrics:
 
             self.all_detections.append(det)
             self.all_targets.append(gt)
+
+    def _update_single(self, pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels):
+        if len(pred_boxes) > 0:
+            det = torch.cat([
+                pred_boxes.float(),
+                pred_scores.unsqueeze(1).float(),
+                pred_scores.unsqueeze(1).float(),
+                pred_labels.unsqueeze(1).float(),
+            ], dim=1).cpu()
+        else:
+            det = None
+
+        if len(gt_boxes) > 0:
+            gt = torch.cat([gt_labels.unsqueeze(1).float(), gt_boxes.float()], dim=1).cpu()
+        else:
+            gt = torch.zeros((0, 5))
+
+        self.all_detections.append(det)
+        self.all_targets.append(gt)
 
     def compute(self, skip_coco_map=False):
         """
@@ -116,7 +151,7 @@ class DetectionMetrics:
                 pred_cls_list.append(det[:, 6].numpy())
 
         if len(tp_list) == 0 or len(target_cls_list) == 0:
-            per_class = {self.CLASS_NAMES[i]: 0.0 for i in range(self.num_classes)}
+            per_class = {self.class_names[i] if i < len(self.class_names) else f'class_{i}': 0.0 for i in range(self.num_classes)}
             return {'mAP50': 0.0, 'mAP50_95': 0.0, 'per_class_ap50': per_class}
 
         tp = np.concatenate(tp_list, axis=0)
@@ -138,7 +173,7 @@ class DetectionMetrics:
 
         per_class = {}
         for cls_idx in range(self.num_classes):
-            name = self.CLASS_NAMES[cls_idx] if cls_idx < len(self.CLASS_NAMES) else f'class_{cls_idx}'
+            name = self.class_names[cls_idx] if cls_idx < len(self.class_names) else f'class_{cls_idx}'
             per_class[name] = float(ap50[cls_idx])
 
         return {

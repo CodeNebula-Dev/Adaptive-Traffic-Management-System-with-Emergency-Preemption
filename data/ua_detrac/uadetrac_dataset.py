@@ -110,48 +110,47 @@ class UADetracDataset(Dataset):
         # 1. Augmentation: Mosaic (combine 4 surveillance frames)
         if self.augment and random.random() < self.mosaic_prob and len(self) >= 4:
             img, labels = self._load_mosaic(index)
-            orig_h, orig_w = img.shape[:2]
+        else:
+            # 2. Letterbox resize to square target_size
+            img, ratio, (dw, dh) = letterbox(img, target_size=self.img_size)
 
-        # 2. Letterbox resize to square target_size
-        img, ratio, (dw, dh) = letterbox(img, target_size=self.img_size)
-
-        # 3. Adjust normalized bbox coordinates after letterbox padding
-        if len(labels) > 0:
-            # Convert normalized cxcywh -> absolute pixel xyxy on original image
-            boxes = labels[:, 1:].copy()
-            x1 = (boxes[:, 0] - boxes[:, 2] / 2) * orig_w
-            y1 = (boxes[:, 1] - boxes[:, 3] / 2) * orig_h
-            x2 = (boxes[:, 0] + boxes[:, 2] / 2) * orig_w
-            y2 = (boxes[:, 1] + boxes[:, 3] / 2) * orig_h
-
-            # Scale and shift to letterboxed canvas
-            x1 = x1 * ratio + dw
-            y1 = y1 * ratio + dh
-            x2 = x2 * ratio + dw
-            y2 = y2 * ratio + dh
-
-            # Clip to [0, img_size]
-            x1 = np.clip(x1, 0, self.img_size)
-            y1 = np.clip(y1, 0, self.img_size)
-            x2 = np.clip(x2, 0, self.img_size)
-            y2 = np.clip(y2, 0, self.img_size)
-
-            # Convert back to normalized cxcywh
-            w = x2 - x1
-            h = y2 - y1
-            cx = x1 + w / 2.0
-            cy = y1 + h / 2.0
-
-            # Keep only valid non-collapsed boxes
-            valid = (w > 2.0) & (h > 2.0)
-            labels = labels[valid]
+            # 3. Adjust normalized bbox coordinates after letterbox padding
             if len(labels) > 0:
-                labels[:, 1] = cx[valid] / self.img_size
-                labels[:, 2] = cy[valid] / self.img_size
-                labels[:, 3] = w[valid] / self.img_size
-                labels[:, 4] = h[valid] / self.img_size
-            else:
-                labels = np.zeros((0, 5), dtype=np.float32)
+                # Convert normalized cxcywh -> absolute pixel xyxy on original image
+                boxes = labels[:, 1:].copy()
+                x1 = (boxes[:, 0] - boxes[:, 2] / 2) * orig_w
+                y1 = (boxes[:, 1] - boxes[:, 3] / 2) * orig_h
+                x2 = (boxes[:, 0] + boxes[:, 2] / 2) * orig_w
+                y2 = (boxes[:, 1] + boxes[:, 3] / 2) * orig_h
+
+                # Scale and shift to letterboxed canvas
+                x1 = x1 * ratio + dw
+                y1 = y1 * ratio + dh
+                x2 = x2 * ratio + dw
+                y2 = y2 * ratio + dh
+
+                # Clip to [0, img_size]
+                x1 = np.clip(x1, 0, self.img_size)
+                y1 = np.clip(y1, 0, self.img_size)
+                x2 = np.clip(x2, 0, self.img_size)
+                y2 = np.clip(y2, 0, self.img_size)
+
+                # Convert to cxcywh in ABSOLUTE pixel coordinates
+                w = x2 - x1
+                h = y2 - y1
+                cx = x1 + w / 2.0
+                cy = y1 + h / 2.0
+
+                # Keep only valid non-collapsed boxes
+                valid = (w > 2.0) & (h > 2.0)
+                labels = labels[valid]
+                if len(labels) > 0:
+                    labels[:, 1] = cx[valid]
+                    labels[:, 2] = cy[valid]
+                    labels[:, 3] = w[valid]
+                    labels[:, 4] = h[valid]
+                else:
+                    labels = np.zeros((0, 5), dtype=np.float32)
 
         # 4. Color / Lighting / Adverse Weather Augmentations
         if self.augment:
@@ -165,7 +164,7 @@ class UADetracDataset(Dataset):
         img = np.ascontiguousarray(img, dtype=np.float32) / 255.0
         img_tensor = torch.from_numpy(img)
 
-        # Target tensor: [0 (placeholder batch idx), class_id, cx, cy, w, h]
+        # Target tensor: [0 (placeholder batch idx), class_id, cx, cy, w, h] in absolute pixel coordinates
         if len(labels) > 0:
             targets = np.zeros((len(labels), 6), dtype=np.float32)
             targets[:, 1:] = labels
@@ -227,10 +226,11 @@ class UADetracDataset(Dataset):
                 valid = (bw > 2.0) & (bh > 2.0)
                 if np.any(valid):
                     l = labels[valid].copy()
-                    l[:, 1] = bcx[valid] / (s * 2)
-                    l[:, 2] = bcy[valid] / (s * 2)
-                    l[:, 3] = bw[valid] / (s * 2)
-                    l[:, 4] = bh[valid] / (s * 2)
+                    scale = 0.5  # downsample from (s*2, s*2) to (s, s)
+                    l[:, 1] = bcx[valid] * scale
+                    l[:, 2] = bcy[valid] * scale
+                    l[:, 3] = bw[valid] * scale
+                    l[:, 4] = bh[valid] * scale
                     mosaic_labels.append(l)
 
         if mosaic_labels:

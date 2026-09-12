@@ -162,6 +162,14 @@ def train_one_epoch(model, dataloader, criterion, optimizer, scheduler, scaler,
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
+        # Ensure targets are in absolute pixel coordinates for YOLOLoss
+        if targets.numel() > 0 and targets[:, 2].max() <= 1.0 and targets[:, 4].max() <= 1.0:
+            img_h, img_w = images.shape[2:]
+            targets[:, 2] *= img_w
+            targets[:, 3] *= img_h
+            targets[:, 4] *= img_w
+            targets[:, 5] *= img_h
+
         with autocast('cuda', enabled=config['training']['mixed_precision']):
             predictions = model(images)
             loss_dict = criterion(predictions, targets)
@@ -252,10 +260,17 @@ def validate(model, dataloader, criterion, device, config, epoch=0):
                 pred_labels = torch.zeros((0,), dtype=torch.long)
 
             if len(img_targets) > 0:
-                gt_cx = img_targets[:, 2] * img_w
-                gt_cy = img_targets[:, 3] * img_h
-                gt_w = img_targets[:, 4] * img_w
-                gt_h = img_targets[:, 5] * img_h
+                gt_cx = img_targets[:, 2]
+                gt_cy = img_targets[:, 3]
+                gt_w = img_targets[:, 4]
+                gt_h = img_targets[:, 5]
+
+                # Auto-scale if targets were normalized [0, 1]
+                if gt_cx.max() <= 1.0 and gt_w.max() <= 1.0 and gt_cx.numel() > 0:
+                    gt_cx = gt_cx * img_w
+                    gt_cy = gt_cy * img_h
+                    gt_w = gt_w * img_w
+                    gt_h = gt_h * img_h
 
                 gt_x1 = gt_cx - gt_w / 2
                 gt_y1 = gt_cy - gt_h / 2
@@ -271,7 +286,7 @@ def validate(model, dataloader, criterion, device, config, epoch=0):
 
             metrics.update(pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels)
 
-    results = metrics.compute()
+    results = metrics.compute(skip_coco_map=(epoch <= 1))
     print(f"  [Val diagnostics] conf_thresh={conf_thresh:.4f}, total_dets={total_detections}, total_gt={total_ground_truths}, batches={len(dataloader)}")
     return results
 
