@@ -232,7 +232,8 @@ def validate(model, dataloader, criterion, device, config, epoch=0):
     total_detections = 0
     total_ground_truths = 0
 
-    for images, targets in dataloader:
+    pbar = tqdm(dataloader, desc="  Evaluating mAP (Val)", leave=False)
+    for images, targets in pbar:
         images = images.to(device, non_blocking=True)
         img_h, img_w = images.shape[2:]
 
@@ -615,6 +616,9 @@ def main():
                         f"lr={optimizer.param_groups[0]['lr']:.6f}\n")
 
             print()
+
+        if is_distributed:
+            torch.distributed.barrier()
 
     if is_master:
         print("=" * 60)
