@@ -36,7 +36,7 @@ class UADetracDataset(Dataset):
     CLASS_NAMES = ['car', 'motorcycle', 'bus', 'truck', 'unknown_vehicle']
 
     def __init__(self, img_list, label_dir='data/ua_detrac/labels', img_size=512,
-                 augment=True, mosaic_prob=0.4, num_classes=5):
+                 augment=True, mosaic_prob=0.4, num_classes=5, stride=1):
         super().__init__()
         self.img_size = img_size
         self.augment = augment
@@ -48,7 +48,11 @@ class UADetracDataset(Dataset):
         with open(img_list, 'r') as f:
             self.img_paths = [line.strip() for line in f if line.strip()]
 
-        print(f"  → Loaded {len(self.img_paths):,} images from {img_list}", flush=True)
+        if stride > 1:
+            self.img_paths = self.img_paths[::stride]
+            print(f"  → Subsampled with stride={stride}: {len(self.img_paths):,} images from {img_list}", flush=True)
+        else:
+            print(f"  → Loaded {len(self.img_paths):,} images from {img_list}", flush=True)
 
     def __len__(self):
         return len(self.img_paths)

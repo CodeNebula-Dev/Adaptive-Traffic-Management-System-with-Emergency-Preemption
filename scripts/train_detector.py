@@ -147,7 +147,7 @@ def build_scheduler(optimizer, config, steps_per_epoch):
 
 
 def train_one_epoch(model, dataloader, criterion, optimizer, scheduler, scaler,
-                    device, epoch, config, ema=None):
+                    device, epoch, config, ema=None, is_master=True):
     """Train the model for one epoch."""
     model.train()
     total_loss_meter = AverageMeter('Total Loss')
@@ -155,7 +155,7 @@ def train_one_epoch(model, dataloader, criterion, optimizer, scheduler, scaler,
     obj_loss_meter = AverageMeter('Obj Loss')
     cls_loss_meter = AverageMeter('Cls Loss')
 
-    pbar = tqdm(dataloader, desc=f"Epoch {epoch}", leave=True)
+    pbar = tqdm(dataloader, desc=f"Epoch {epoch}", leave=True, disable=not is_master)
     accumulate_grad = config['training'].get('accumulate_grad', 1)
 
     for batch_idx, (images, targets) in enumerate(pbar):
@@ -175,12 +175,11 @@ def train_one_epoch(model, dataloader, criterion, optimizer, scheduler, scaler,
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
             scaler.step(optimizer)
             scaler.update()
+            scheduler.step()
             optimizer.zero_grad()
 
             if ema is not None:
                 ema.update(model)
-
-        scheduler.step()
 
         total_loss_meter.update(loss_val.item(), images.size(0))
         box_loss_meter.update(loss_dict['box_loss'].item(), images.size(0))
@@ -332,12 +331,33 @@ def main():
                         help='Path to checkpoint to resume from (resumes epoch & optimizer)')
     parser.add_argument('--finetune', type=str, default=None,
                         help='Path to pretrained checkpoint to fine-tune from (loads weights, fresh optimizer/schedule)')
+    parser.add_argument('--stride', type=int, default=1,
+                        help='Subsample 1 frame every N frames (e.g. 4 for 4x faster training)')
     args = parser.parse_args()
 
+    # ---- Distributed / Multi-GPU Setup (DDP / torchrun) ----
+    is_distributed = 'LOCAL_RANK' in os.environ
+    if is_distributed:
+        local_rank = int(os.environ['LOCAL_RANK'])
+        world_size = int(os.environ.get('WORLD_SIZE', 1))
+        torch.cuda.set_device(local_rank)
+        device = torch.device(f'cuda:{local_rank}')
+        if not torch.distributed.is_initialized():
+            torch.distributed.init_process_group(backend='nccl')
+    else:
+        local_rank = 0
+        world_size = 1
+        device = get_device(args.device)
+
+    is_master = (local_rank == 0)
+
     # ---- Load Config ----
-    print("=" * 60)
-    print("ATMS-Net — Vehicle Detector Training & Fine-Tuning")
-    print("=" * 60)
+    if is_master:
+        print("=" * 60)
+        print("ATMS-Net — Vehicle Detector Training & Fine-Tuning")
+        if is_distributed:
+            print(f"  → Multi-GPU Distributed Data Parallel (DDP) Active: {world_size} GPUs")
+        print("=" * 60)
 
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
@@ -348,15 +368,13 @@ def main():
     if args.batch_size is not None:
         config['training']['batch_size'] = args.batch_size
 
-    # ---- Device ----
-    device = get_device(args.device)
-
     # Disable mixed precision on non-CUDA devices
     if device.type != 'cuda':
         config['training']['mixed_precision'] = False
 
     # ---- Model ----
-    print("\n[Model]")
+    if is_master:
+        print("\n[Model]")
     model = ATMSDetector.from_config(args.config)
     model.to(device)
 
@@ -365,33 +383,46 @@ def main():
     start_epoch = 0
 
     if args.finetune and os.path.exists(args.finetune):
-        model.load_pretrained_with_class_expansion(args.finetune, device=device)
-        print("  → Initialized fresh optimizer & learning rate schedule for fine-tuning")
+        if is_master:
+            model.load_pretrained_with_class_expansion(args.finetune, device=device)
+            print("  → Initialized fresh optimizer & learning rate schedule for fine-tuning")
+        else:
+            model.load_pretrained_with_class_expansion(args.finetune, device=device)
 
-    model.summary()
+    if is_master:
+        model.summary()
 
     # ---- EMA ----
     ema = None
     if config['training'].get('ema', False):
         ema = ModelEMA(model, decay=config['training'].get('ema_decay', 0.9999))
-        print("  → EMA enabled")
+        if is_master:
+            print("  → EMA enabled")
+
+    # Wrap model with DDP for multi-GPU if applicable
+    if is_distributed:
+        model = nn.parallel.DistributedDataParallel(
+            model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False
+        )
 
     # ---- Dataset ----
-    print("\n[Dataset]")
+    if is_master:
+        print("\n[Dataset]")
     data_cfg = config['data']
     dataset_type = data_cfg.get('dataset_type', 'coco').lower()
 
     if not os.path.exists(data_cfg['train_list']):
-        print(f"\n  ⚠ Training data not found: {data_cfg['train_list']}")
-        if dataset_type == 'uadetrac':
-            print(f"  Run this first: python data/ua_detrac/download_uadetrac.py --data-dir {data_cfg['data_dir']}")
-        else:
-            print(f"  Run this first: python data/coco/download_coco.py --data-dir {data_cfg['data_dir']}")
-        print(f"\n  For a quick smoke test without data, use: --epochs 0")
+        if is_master:
+            print(f"\n  ⚠ Training data not found: {data_cfg['train_list']}")
+            if dataset_type == 'uadetrac':
+                print(f"  Run this first: python data/ua_detrac/download_uadetrac.py --data-dir {data_cfg['data_dir']}")
+            else:
+                print(f"  Run this first: python data/coco/download_coco.py --data-dir {data_cfg['data_dir']}")
         sys.exit(1)
 
     if dataset_type == 'uadetrac' and UADetracDataset is not None:
-        print("  → Ingesting UA-DETRAC Traffic Surveillance Dataset (5 classes)")
+        if is_master:
+            print("  → Ingesting UA-DETRAC Traffic Surveillance Dataset (5 classes)")
         train_dataset = UADetracDataset(
             img_list=data_cfg['train_list'],
             label_dir=data_cfg.get('label_dir', 'data/ua_detrac/labels'),
@@ -399,6 +430,7 @@ def main():
             augment=True,
             mosaic_prob=config['augmentation'].get('mosaic_prob', 0.4),
             num_classes=config['model']['num_classes'],
+            stride=args.stride,
         )
         val_dataset = UADetracDataset(
             img_list=data_cfg['val_list'],
@@ -407,6 +439,7 @@ def main():
             augment=False,
             mosaic_prob=0.0,
             num_classes=config['model']['num_classes'],
+            stride=max(1, args.stride // 2),
         )
     else:
         train_label_dir = data_cfg.get('train_label_dir', data_cfg.get('label_dir', 'data/coco/labels/train2017'))
@@ -427,10 +460,15 @@ def main():
             mosaic_prob=0.0,
         )
 
+    train_sampler = torch.utils.data.distributed.DistributedSampler(
+        train_dataset, num_replicas=world_size, rank=local_rank, shuffle=True
+    ) if is_distributed else None
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=config['training']['batch_size'],
-        shuffle=True,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
         num_workers=data_cfg.get('num_workers', 4),
         collate_fn=detection_collate_fn,
         pin_memory=(device.type == 'cuda'),
@@ -444,10 +482,11 @@ def main():
         num_workers=data_cfg.get('num_workers', 4),
         collate_fn=detection_collate_fn,
         pin_memory=(device.type == 'cuda'),
-    )
+    ) if is_master else None
 
-    print(f"  → Train: {len(train_dataset)} images, {len(train_loader)} batches")
-    print(f"  → Val:   {len(val_dataset)} images, {len(val_loader)} batches")
+    if is_master:
+        print(f"  → Train: {len(train_dataset)} images, {len(train_loader)} batches")
+        print(f"  → Val:   {len(val_dataset)} images, {len(val_loader)} batches")
 
     # ---- Loss ----
     loss_cfg = config['loss']
@@ -491,75 +530,85 @@ def main():
     log_file = os.path.join(log_dir, 'training.log')
 
     # ---- Training Loop ----
-    print("\n" + "=" * 60)
-    print(f"Starting training: {config['training']['epochs']} epochs")
-    print("=" * 60 + "\n")
+    if is_master:
+        print("\n" + "=" * 60)
+        print(f"Starting training: {config['training']['epochs']} epochs")
+        print("=" * 60 + "\n")
 
     for epoch in range(start_epoch, config['training']['epochs']):
         epoch_start = time.time()
 
+        if is_distributed and train_sampler is not None:
+            train_sampler.set_epoch(epoch)
+
         # Train
         train_losses = train_one_epoch(
             model, train_loader, criterion, optimizer, scheduler,
-            scaler, device, epoch + 1, config, ema=ema,
+            scaler, device, epoch + 1, config, ema=ema, is_master=is_master,
         )
 
         epoch_time = time.time() - epoch_start
 
-        # Log training results
-        print(f"\n  Epoch {epoch + 1}/{config['training']['epochs']} "
-              f"({epoch_time:.1f}s) — "
-              f"loss: {train_losses['total_loss']:.4f} "
-              f"[box: {train_losses['box_loss']:.4f}, "
-              f"obj: {train_losses['obj_loss']:.4f}, "
-              f"cls: {train_losses['cls_loss']:.4f}]")
+        raw_model = model.module if hasattr(model, 'module') else model
 
-        # Validate
-        val_interval = config['evaluation'].get('val_interval', 1)
-        warmup_epochs = config['training'].get('warmup_epochs', 3)
-        if (epoch + 1) % val_interval == 0:
-            # Use raw model during early warmup while EMA is still initializing
-            eval_model = ema.ema if (ema and (epoch + 1) > warmup_epochs) else model
-            val_results = validate(eval_model, val_loader, criterion, device, config, epoch=epoch + 1)
+        # Log training results (Master rank only)
+        if is_master:
+            print(f"\n  Epoch {epoch + 1}/{config['training']['epochs']} "
+                  f"({epoch_time:.1f}s) — "
+                  f"loss: {train_losses['total_loss']:.4f} "
+                  f"[box: {train_losses['box_loss']:.4f}, "
+                  f"obj: {train_losses['obj_loss']:.4f}, "
+                  f"cls: {train_losses['cls_loss']:.4f}]")
 
-            map50 = val_results['mAP50']
-            map50_95 = val_results['mAP50_95']
+            # Validate
+            val_interval = config['evaluation'].get('val_interval', 1)
+            warmup_epochs = config['training'].get('warmup_epochs', 3)
+            if (epoch + 1) % val_interval == 0 and val_loader is not None:
+                eval_model = ema.ema if (ema and (epoch + 1) > warmup_epochs) else raw_model
+                val_results = validate(eval_model, val_loader, criterion, device, config, epoch=epoch + 1)
 
-            print(f"  Val mAP@0.5: {map50:.4f}  |  mAP@0.5:0.95: {map50_95:.4f}")
-            print(f"  Per-class AP@0.5: ", end='')
-            for cls_name, ap in val_results['per_class_ap50'].items():
-                print(f"{cls_name}={ap:.3f}  ", end='')
+                map50 = val_results['mAP50']
+                map50_95 = val_results['mAP50_95']
+
+                print(f"  Val mAP@0.5: {map50:.4f}  |  mAP@0.5:0.95: {map50_95:.4f}")
+                print(f"  Per-class AP@0.5: ", end='')
+                for cls_name, ap in val_results['per_class_ap50'].items():
+                    print(f"{cls_name}={ap:.3f}  ", end='')
+                print()
+
+                # Save best model
+                if map50 > best_map:
+                    best_map = map50
+                    save_checkpoint(raw_model, ema, optimizer, scheduler, epoch, best_map, config, 'best.pt')
+                    print(f"  ★ New best mAP@0.5: {best_map:.4f}")
+
+            # Save periodic checkpoint
+            save_interval = config['checkpoint'].get('save_interval', 10)
+            if (epoch + 1) % save_interval == 0:
+                save_checkpoint(raw_model, ema, optimizer, scheduler, epoch, best_map, config, f'epoch_{epoch+1}.pt')
+
+            # Save last checkpoint (always)
+            save_checkpoint(raw_model, ema, optimizer, scheduler, epoch, best_map, config, 'last.pt')
+
+            # Write to log file
+            with open(log_file, 'a') as f:
+                f.write(f"epoch={epoch+1} "
+                        f"loss={train_losses['total_loss']:.4f} "
+                        f"box={train_losses['box_loss']:.4f} "
+                        f"obj={train_losses['obj_loss']:.4f} "
+                        f"cls={train_losses['cls_loss']:.4f} "
+                        f"lr={optimizer.param_groups[0]['lr']:.6f}\n")
+
             print()
 
-            # Save best model
-            if map50 > best_map:
-                best_map = map50
-                save_checkpoint(model, ema, optimizer, scheduler, epoch, best_map, config, 'best.pt')
-                print(f"  ★ New best mAP@0.5: {best_map:.4f}")
+    if is_master:
+        print("=" * 60)
+        print(f"Training complete! Best mAP@0.5: {best_map:.4f}")
+        print(f"Best model saved to: {os.path.join(config['checkpoint']['save_dir'], 'best.pt')}")
+        print("=" * 60)
 
-        # Save periodic checkpoint
-        save_interval = config['checkpoint'].get('save_interval', 10)
-        if (epoch + 1) % save_interval == 0:
-            save_checkpoint(model, ema, optimizer, scheduler, epoch, best_map, config, f'epoch_{epoch+1}.pt')
-
-        # Save last checkpoint (always)
-        save_checkpoint(model, ema, optimizer, scheduler, epoch, best_map, config, 'last.pt')
-
-        # Write to log file
-        with open(log_file, 'a') as f:
-            f.write(f"epoch={epoch+1} "
-                    f"loss={train_losses['total_loss']:.4f} "
-                    f"box={train_losses['box_loss']:.4f} "
-                    f"obj={train_losses['obj_loss']:.4f} "
-                    f"cls={train_losses['cls_loss']:.4f} "
-                    f"lr={optimizer.param_groups[0]['lr']:.6f}\n")
-
-        print()
-
-    print("=" * 60)
-    print(f"Training complete! Best mAP@0.5: {best_map:.4f}")
-    print(f"Best model saved to: {os.path.join(config['checkpoint']['save_dir'], 'best.pt')}")
-    print("=" * 60)
+    if is_distributed:
+        torch.distributed.destroy_process_group()
 
 
 if __name__ == '__main__':
