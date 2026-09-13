@@ -225,13 +225,16 @@ class ModelEMA:
         # Ramp up decay from 0 to target over first few thousand updates
         d = self.decay * (1 - math.exp(-self.updates / 2000))
 
+        # Unwrap DistributedDataParallel / DataParallel wrapper if present
+        source_model = model.module if hasattr(model, 'module') else model
+
         with torch.no_grad():
-            model_params = dict(model.named_parameters())
+            model_params = dict(source_model.named_parameters())
             for name, ema_param in self.ema.named_parameters():
                 if name in model_params:
                     ema_param.data.mul_(d).add_(model_params[name].data, alpha=1 - d)
 
-            model_buffers = dict(model.named_buffers())
+            model_buffers = dict(source_model.named_buffers())
             for name, ema_buf in self.ema.named_buffers():
                 if name in model_buffers:
                     ema_buf.data.copy_(model_buffers[name].data)
