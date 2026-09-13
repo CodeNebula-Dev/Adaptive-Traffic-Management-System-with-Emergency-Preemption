@@ -536,7 +536,9 @@ def main():
     if args.resume and os.path.exists(args.resume):
         print(f"\n[Resume] Loading checkpoint: {args.resume}")
         ckpt = torch.load(args.resume, map_location=device)
-        model.load_state_dict(ckpt['model_state_dict'])
+        # Load into the unwrapped model (checkpoint keys don't have 'module.' prefix)
+        resume_model = model.module if hasattr(model, 'module') else model
+        resume_model.load_state_dict(ckpt['model_state_dict'])
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         scheduler.load_state_dict(ckpt['scheduler_state_dict'])
         start_epoch = ckpt['epoch'] + 1
