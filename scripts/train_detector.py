@@ -37,6 +37,7 @@ import argparse
 from pathlib import Path
 
 import yaml
+import datetime
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -237,7 +238,8 @@ def validate(model, dataloader, criterion, device, config, epoch=0):
         images = images.to(device, non_blocking=True)
         img_h, img_w = images.shape[2:]
 
-        predictions = model(images)
+        with autocast('cuda', enabled=config['training'].get('mixed_precision', True)):
+            predictions = model(images)
         batch_detections = batch_nms(
             predictions,
             conf_threshold=conf_thresh,
@@ -359,7 +361,10 @@ def main():
         torch.cuda.set_device(local_rank)
         device = torch.device(f'cuda:{local_rank}')
         if not torch.distributed.is_initialized():
-            torch.distributed.init_process_group(backend='nccl')
+            torch.distributed.init_process_group(
+                backend='nccl',
+                timeout=datetime.timedelta(minutes=30),
+            )
     else:
         local_rank = 0
         world_size = 1
@@ -455,7 +460,7 @@ def main():
             augment=False,
             mosaic_prob=0.0,
             num_classes=config['model']['num_classes'],
-            stride=max(1, args.stride // 2),
+            stride=args.stride,
         )
     else:
         train_label_dir = data_cfg.get('train_label_dir', data_cfg.get('label_dir', 'data/coco/labels/train2017'))
